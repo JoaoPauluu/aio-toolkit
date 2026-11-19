@@ -1,0 +1,25 @@
+id: pdf-pages
+name: Bulk Rotate / Remove Pages
+category: PDF
+icon: "🔃"
+description: Rotate or delete many pages at once, e.g. "rotate all even pages" or "remove pages 3-5".
+run: [python3, run.py]
+submit_label: Apply
+timeout: 30m
+inputs:
+  - {name: files, label: PDF files, type: file, accept: ".pdf,application/pdf", multiple: true, required: true}
+  - name: action
+    label: Action
+    type: select
+    default: rotate90
+    options:
+      - {value: rotate90, label: "Rotate 90° clockwise"}
+      - {value: rotate180, label: "Rotate 180°"}
+      - {value: rotate270, label: "Rotate 90° counter-clockwise"}
+      - {value: delete, label: Delete pages}
+  - name: which
+    label: Pages
+    type: select
+    default: all
+    options: [{value: all, label: All pages}, {value: odd, label: Odd pages}, {value: even, label: Even pages}, {value: custom, label: Custom ranges…}]
+  - {name: ranges, label: Page ranges, placeholder: "1-3, 7, 9-z", help: '"z" is the last page.', show_if: {which: [custom]}}

@@ -1,0 +1,27 @@
+id: media-extract-audio
+name: Extract Audio
+category: Media
+icon: "🎧"
+description: Pull the audio track out of a video, keeping the original stream (no quality loss) when possible.
+run: [python3, run.py]
+submit_label: Extract
+timeout: 3h
+inputs:
+  - {name: files, label: Video files, type: file, accept: "video/*,audio/*,.mkv,.flac,.opus,.m4a,.ts,.avi,.wmv,.mov", multiple: true, required: true}
+  - name: format
+    label: Format
+    type: select
+    default: original
+    options:
+      - {value: original, label: "Original (lossless copy)"}
+      - {value: mp3, label: MP3}
+      - {value: m4a, label: M4A / AAC}
+      - {value: opus, label: Opus}
+      - {value: flac, label: FLAC}
+      - {value: wav, label: WAV}
+  - name: bitrate
+    label: Bitrate
+    type: select
+    default: "192k"
+    options: ["128k", "192k", "256k", "320k"]
+    show_if: {format: [mp3, m4a, opus]}

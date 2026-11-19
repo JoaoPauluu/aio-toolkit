@@ -1,0 +1,6 @@
+id: share
+name: Share files
+category: Share
+icon: "🔗"
+description: Upload files and get a public link, with optional expiry, password and note.
+ui: ui/index.html

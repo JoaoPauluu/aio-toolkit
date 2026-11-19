@@ -121,3 +121,21 @@ def human(n: float) -> str:
             return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
         n /= 1024
     return str(n)
+
+
+def ensure_packages(name: str, *pkgs: str) -> None:
+    """Make pip packages importable, installing them on first use into
+    $AIO_DATA/venvs/<name> (persists across container updates)."""
+    import glob
+    import site
+    venv = DATA / "venvs" / name
+    marker = venv / ".installed"
+    want = "\n".join(sorted(pkgs))
+    if not marker.exists() or marker.read_text() != want:
+        status(f"Installing {', '.join(pkgs)} (first run only)…")
+        if not (venv / "bin" / "pip").exists():
+            run([sys.executable, "-m", "venv", venv])
+        run([venv / "bin" / "pip", "install", "--no-cache-dir", "--disable-pip-version-check", "-q", *pkgs])
+        marker.write_text(want)
+    for sp in glob.glob(str(venv / "lib" / "python*" / "site-packages")):
+        site.addsitedir(sp)

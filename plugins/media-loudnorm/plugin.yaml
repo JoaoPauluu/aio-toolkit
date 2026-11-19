@@ -1,0 +1,19 @@
+id: media-loudnorm
+name: Normalize Loudness
+category: Media
+icon: "🔊"
+description: Even out volume with ffmpeg's two-pass EBU R128 loudnorm (podcasts, music downloads).
+run: [python3, run.py]
+submit_label: Normalize
+timeout: 3h
+inputs:
+  - {name: files, label: Audio or video files, type: file, accept: "video/*,audio/*,.mkv,.flac,.opus,.m4a,.ts,.avi,.wmv,.mov", multiple: true, required: true}
+  - name: target
+    label: Target loudness
+    type: select
+    default: "-16"
+    options:
+      - {value: "-16", label: "Podcast / voice (−16 LUFS)"}
+      - {value: "-14", label: "Streaming music (−14 LUFS)"}
+      - {value: "-23", label: "Broadcast EBU R128 (−23 LUFS)"}
+  - {name: tp, label: True peak limit (dBTP), type: number, default: -1.5, min: -9, max: 0}

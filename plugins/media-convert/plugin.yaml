@@ -1,0 +1,70 @@
+id: media-convert
+name: Media Converter
+category: Media
+icon: "🎞️"
+description: Convert any audio or video file to another format (MKV→MP4, FLAC→MP3, …) with ffmpeg.
+run: [python3, run.py]
+submit_label: Convert
+timeout: 6h
+inputs:
+  - {name: files, label: Media files, type: file, accept: "video/*,audio/*,.mkv,.flac,.opus,.m4a,.ts,.avi,.wmv,.mov", multiple: true, required: true}
+  - name: container
+    label: Output format
+    type: select
+    default: mp4
+    options:
+      - {value: mp4, label: "MP4 (video)"}
+      - {value: mkv, label: "MKV (video)"}
+      - {value: webm, label: "WebM (video)"}
+      - {value: mov, label: "MOV (video)"}
+      - {value: mp3, label: "MP3 (audio)"}
+      - {value: m4a, label: "M4A / AAC (audio)"}
+      - {value: opus, label: "Opus (audio)"}
+      - {value: ogg, label: "OGG Vorbis (audio)"}
+      - {value: flac, label: "FLAC (lossless audio)"}
+      - {value: wav, label: "WAV (uncompressed audio)"}
+  - name: vcodec
+    label: Video codec
+    type: select
+    default: auto
+    options:
+      - {value: auto, label: "Auto (copy if compatible, else best fit)"}
+      - {value: copy, label: "Copy (no re-encode, fastest)"}
+      - {value: h264, label: "H.264 (most compatible)"}
+      - {value: h265, label: "H.265 / HEVC (smaller)"}
+      - {value: vp9, label: VP9}
+      - {value: av1, label: "AV1 (smallest, slow)"}
+    show_if: {container: [mp4, mkv, webm, mov]}
+  - name: crf
+    label: Quality (CRF)
+    type: number
+    default: 23
+    min: 0
+    max: 63
+    help: Lower = better quality and bigger files. ~18 visually lossless, 23 default, 28 small.
+    show_if: {container: [mp4, mkv, webm, mov]}
+  - name: preset
+    label: Encoder speed
+    type: select
+    default: medium
+    options: [ultrafast, veryfast, fast, medium, slow, veryslow]
+    show_if: {container: [mp4, mkv, webm, mov]}
+  - name: height
+    label: Resolution
+    type: select
+    default: keep
+    options:
+      - {value: keep, label: Keep original}
+      - {value: "2160", label: 2160p}
+      - {value: "1440", label: 1440p}
+      - {value: "1080", label: 1080p}
+      - {value: "720", label: 720p}
+      - {value: "480", label: 480p}
+      - {value: "360", label: 360p}
+    show_if: {container: [mp4, mkv, webm, mov]}
+  - name: abitrate
+    label: Audio bitrate
+    type: select
+    default: "192k"
+    options: ["96k", "128k", "160k", "192k", "256k", "320k"]
+    show_if: {container: [mp4, mkv, webm, mov, mp3, m4a, opus, ogg]}

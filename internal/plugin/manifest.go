@@ -110,8 +110,8 @@ func Load(dir string) (*Manifest, error) {
 	if m.Category == "" {
 		m.Category = "Other"
 	}
-	if len(m.Run) == 0 {
-		return nil, fmt.Errorf("%s: 'run' is required", m.ID)
+	if len(m.Run) == 0 && m.UI == "" {
+		return nil, fmt.Errorf("%s: 'run' is required (or set 'ui' for a UI-only plugin)", m.ID)
 	}
 	m.Timeout = 2 * time.Hour
 	if m.TimeoutStr != "" {

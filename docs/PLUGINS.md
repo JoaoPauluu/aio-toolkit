@@ -96,9 +96,29 @@ echo "::status Fetching"
 curl -fsSL "$URL" -o "$AIO_OUT/page.html"
 ```
 
+### Media helper (`aio_media`)
+
+```python
+from aio_media import probe, ffmpeg, out_for, parse_time
+info = probe(src)                    # .duration .width .height .vcodec .acodec .video .audio
+ffmpeg(["-i", src, "-c:v", "libx264", out_for(src, "mp4")], info.duration)   # live progress bar
+ffmpeg(args_pass1, info.duration, 0, 50); ffmpeg(args_pass2, info.duration, 50, 100)  # two-pass
+parse_time("1:30.5")                 # -> 90.5
+```
+
+### Extra Python packages
+
+If a plugin needs a pip package, call `aio.ensure_packages()`. On the first run it installs the packages into `$AIO_DATA/venvs/<name>`, so they persist across image updates, and every run after that just imports them:
+
+```python
+import aio
+aio.ensure_packages("qrcode", "qrcode[pil]")
+import qrcode
+```
+
 ## Custom UIs
 
-Set `ui: ui/index.html`. The page loads in an iframe at `/p/<id>/ui/index.html`, and only the files in that folder are served. Use the shared stylesheet and the SDK:
+Set `ui: ui/index.html`. If a plugin has a `ui` but no `run`, it is UI-only and talks directly to the server API (`plugins/share` works this way). The page loads in an iframe at `/p/<id>/ui/index.html`, and only the files in that folder are served. Use the shared stylesheet and the SDK:
 
 ```html
 <link rel="stylesheet" href="/style.css">

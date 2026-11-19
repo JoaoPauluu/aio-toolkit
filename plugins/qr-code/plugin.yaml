@@ -1,0 +1,36 @@
+id: qr-code
+name: QR Code Generator
+category: Utilities
+icon: "🔳"
+description: Make a QR code for a link, text, Wi-Fi network or contact.
+run: [python3, run.py]
+submit_label: Generate
+timeout: 10m
+inputs:
+  - name: kind
+    label: Content
+    type: select
+    default: text
+    options: [{value: text, label: Link or text}, {value: wifi, label: Wi-Fi network}]
+  - {name: text, label: Link or text, type: textarea, placeholder: "https://example.com", show_if: {kind: [text]}}
+  - {name: ssid, label: Network name (SSID), show_if: {kind: [wifi]}}
+  - {name: wifi_password, label: Password, show_if: {kind: [wifi]}}
+  - name: security
+    label: Security
+    type: select
+    default: WPA
+    options: [{value: WPA, label: WPA/WPA2/WPA3}, {value: WEP, label: WEP}, {value: nopass, label: Open (no password)}]
+    show_if: {kind: [wifi]}
+  - name: format
+    label: Format
+    type: select
+    default: png
+    options: [{value: png, label: PNG}, {value: svg, label: "SVG (scalable, for print)"}]
+  - {name: box_size, label: Pixels per module, type: number, default: 12, min: 1, max: 50, show_if: {format: [png]}}
+  - {name: border, label: Quiet-zone border (modules), type: number, default: 4, min: 0, max: 20}
+  - name: ecc
+    label: Error correction
+    type: select
+    default: M
+    options: [{value: L, label: "Low (7%)"}, {value: M, label: "Medium (15%)"}, {value: Q, label: "Quartile (25%)"}, {value: H, label: "High (30%, survives logos/damage)"}]
+  - {name: filename, label: File name, default: qrcode}

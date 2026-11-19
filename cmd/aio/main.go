@@ -17,6 +17,7 @@ import (
 	"aio/internal/jobs"
 	"aio/internal/plugin"
 	"aio/internal/server"
+	"aio/internal/shares"
 	"aio/web"
 )
 
@@ -76,6 +77,11 @@ func main() {
 		log.Fatal(err)
 	}
 
+	shareMgr, err := shares.NewManager(dataDir)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	static, err := fs.Sub(web.FS, "static")
 	if err != nil {
 		log.Fatal(err)
@@ -86,6 +92,10 @@ func main() {
 		Static:    static,
 		MaxUpload: int64(envInt("AIO_MAX_UPLOAD_MB", 4096)) << 20,
 		Version:   version,
+
+		Shares:         shareMgr,
+		ShareMaxUpload: int64(envInt("AIO_SHARE_MAX_MB", 2048)) << 20,
+		PublicURL:      os.Getenv("AIO_PUBLIC_URL"),
 	}
 	hs := &http.Server{
 		Addr:              addr,
@@ -95,6 +105,7 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go shareMgr.RunCleanup(ctx, envDur("AIO_SHARE_CLEANUP", 10*time.Minute))
 	go func() {
 		log.Printf("listening on %s (plugins: %s, data: %s)", addr, strings.Join(pluginDirs, ", "), dataDir)
 		if err := hs.ListenAndServe(); err != nil && err != http.ErrServerClosed {

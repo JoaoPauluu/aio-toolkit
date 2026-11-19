@@ -1,0 +1,20 @@
+id: pdf-protect
+name: Unlock / Protect PDF
+category: PDF
+icon: "🔐"
+description: Remove a PDF password, or add one with AES-256 encryption and permission restrictions.
+run: [python3, run.py]
+timeout: 30m
+inputs:
+  - {name: files, label: PDF files, type: file, accept: ".pdf,application/pdf", multiple: true, required: true}
+  - name: mode
+    label: Action
+    type: select
+    default: unlock
+    options: [{value: unlock, label: Remove password / restrictions}, {value: protect, label: Add password}]
+  - {name: password, label: Current password, help: "Leave empty if the PDF opens without a password (removes edit/print restrictions only).", show_if: {mode: [unlock]}}
+  - {name: user_password, label: Password to open, show_if: {mode: [protect]}}
+  - {name: owner_password, label: Owner password (optional), help: "Needed to change permissions later. A random one is generated if empty.", show_if: {mode: [protect]}}
+  - {name: allow_print, label: Allow printing, type: checkbox, default: true, show_if: {mode: [protect]}}
+  - {name: allow_copy, label: Allow copying text and images, type: checkbox, default: true, show_if: {mode: [protect]}}
+  - {name: allow_edit, label: Allow editing, type: checkbox, default: false, show_if: {mode: [protect]}}

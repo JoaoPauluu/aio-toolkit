@@ -1,0 +1,25 @@
+id: media-trim
+name: Trim / Cut
+category: Media
+icon: "✂️"
+description: Cut a section out of a video or audio file, losslessly (instant) or frame-accurate.
+run: [python3, run.py]
+submit_label: Cut
+timeout: 3h
+inputs:
+  - {name: files, label: Media file, type: file, accept: "video/*,audio/*,.mkv,.flac,.opus,.m4a,.ts,.avi,.wmv,.mov", required: true}
+  - {name: start, label: Start, placeholder: "00:01:30 or 90", help: "Leave empty to start at the beginning."}
+  - name: end_mode
+    label: End by
+    type: select
+    default: end
+    options: [{value: end, label: End time}, {value: duration, label: Duration}]
+  - {name: end, label: End time, placeholder: "00:02:45", show_if: {end_mode: [end]}, help: "Leave empty to cut to the end."}
+  - {name: duration, label: Duration, placeholder: "30 or 00:00:30", show_if: {end_mode: [duration]}}
+  - name: mode
+    label: Cut mode
+    type: select
+    default: lossless
+    options:
+      - {value: lossless, label: "Lossless (instant, cuts at nearest keyframe)"}
+      - {value: precise, label: "Precise (re-encode, frame-accurate)"}

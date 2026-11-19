@@ -21,7 +21,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=
 
 # ---- runtime: tools the plugins call ----
 FROM python:3.13-alpine
-RUN apk add --no-cache ffmpeg qpdf ghostscript nodejs tini \
+RUN apk add --no-cache ffmpeg qpdf ghostscript nodejs tini vips-tools vips-heif \
  && python -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir --disable-pip-version-check "yt-dlp[default]" \
  && find /opt/venv -name '__pycache__' -prune -exec rm -rf {} +

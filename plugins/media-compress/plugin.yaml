@@ -1,0 +1,26 @@
+id: media-compress
+name: Compress Video to Size
+category: Media
+icon: "📦"
+description: Shrink a video to fit a target size (e.g. under 10 MB for Discord). Bitrate is computed from the duration.
+run: [python3, run.py]
+submit_label: Compress
+timeout: 6h
+inputs:
+  - {name: files, label: Video files, type: file, accept: "video/*,audio/*,.mkv,.flac,.opus,.m4a,.ts,.avi,.wmv,.mov", multiple: true, required: true}
+  - name: target
+    label: Target size
+    type: select
+    default: "10"
+    options:
+      - {value: "10", label: "10 MB (Discord free)"}
+      - {value: "25", label: 25 MB}
+      - {value: "50", label: "50 MB (Discord Basic)"}
+      - {value: "100", label: 100 MB}
+      - {value: custom, label: Custom…}
+  - {name: custom_mb, label: Target size (MB), type: number, default: 20, min: 1, show_if: {target: [custom]}}
+  - name: speed
+    label: Encoder speed
+    type: select
+    default: medium
+    options: [{value: veryfast, label: Fast}, {value: medium, label: Balanced}, {value: slow, label: "Slow (best quality)"}]

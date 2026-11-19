@@ -1,0 +1,28 @@
+id: pdf-to-images
+name: PDF → Images
+category: PDF
+icon: "🖼️"
+description: Render every page (or a range) of a PDF as PNG or JPG images.
+run: [python3, run.py]
+submit_label: Convert
+timeout: 1h
+inputs:
+  - {name: files, label: PDF files, type: file, accept: ".pdf,application/pdf", multiple: true, required: true}
+  - name: format
+    label: Image format
+    type: select
+    default: png
+    options: [{value: png, label: "PNG (sharp, larger)"}, {value: jpg, label: "JPG (photos, smaller)"}]
+  - name: dpi
+    label: Resolution
+    type: select
+    default: "150"
+    options:
+      - {value: "72", label: "72 dpi (screen preview)"}
+      - {value: "150", label: "150 dpi (good default)"}
+      - {value: "300", label: "300 dpi (print quality)"}
+      - {value: custom, label: Custom…}
+  - {name: custom_dpi, label: DPI, type: number, default: 200, min: 20, max: 1200, show_if: {dpi: [custom]}}
+  - {name: first, label: First page, type: number, min: 1, help: Leave empty for page 1.}
+  - {name: last, label: Last page, type: number, min: 1, help: Leave empty for the last page.}
+  - {name: zip, label: Bundle into a .zip, type: checkbox, default: true}

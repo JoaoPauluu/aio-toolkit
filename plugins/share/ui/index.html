@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Share files</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { background: transparent; padding: 2px; }
+    .panel { padding: 16px; display: grid; gap: 14px; }
+    .row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+    .row .field { flex: 1; min-width: 160px; }
+    input[type=password] { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--panel); color: var(--text); font: inherit; }
+    input[type=password]:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+    .files { display: grid; gap: 6px; }
+    .fcard { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--panel-2); border-radius: 8px; }
+    .fcard .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hint { font-size: 12px; color: var(--muted); }
+    .err { color: var(--err); font-size: 13px; }
+    .result { display: grid; gap: 8px; padding: 12px; border-radius: 8px; background: var(--accent-soft); }
+    .linkrow { display: flex; gap: 8px; }
+    .linkrow input { flex: 1; min-width: 0; font-family: var(--mono); font-size: 13px; }
+    h2.sec { margin: 22px 0 10px; display: flex; justify-content: space-between; align-items: center; }
+    .shares { display: grid; gap: 8px; }
+    .share { padding: 12px 14px; display: grid; gap: 6px; }
+    .share .top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .share .nm { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .share .flist { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+    .share .note { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .soon { color: var(--warn); }
+  </style>
+</head>
+<body>
+  <div class="card panel">
+    <label class="dropzone" id="drop">
+      <input type="file" id="picker" multiple>
+      <div>📂 Drop files here or click to browse</div>
+      <div class="small">Anyone with the link can download them.</div>
+    </label>
+    <div class="files" id="files"></div>
+
+    <div class="row">
+      <div class="field">
+        <label class="lbl" for="expires">Expires after</label>
+        <select id="expires">
+          <option value="1h">1 hour</option>
+          <option value="1d">1 day</option>
+          <option value="7d" selected>7 days</option>
+          <option value="30d">30 days</option>
+          <option value="never">Never</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="lbl" for="password">Password <span class="hint">(optional)</span></label>
+        <input type="password" id="password" autocomplete="new-password" placeholder="No password">
+      </div>
+    </div>
+    <div class="field">
+      <label class="lbl" for="note">Note <span class="hint">(optional, shown on the download page)</span></label>
+      <input type="text" id="note" maxlength="2000" placeholder="e.g. Photos from Saturday">
+    </div>
+
+    <div class="row">
+      <div style="flex:1">
+        <div class="bar" id="bar" hidden><div style="width:0%"></div></div>
+        <div class="hint" id="progress"></div>
+      </div>
+      <button class="btn primary" id="go" disabled>Create link</button>
+    </div>
+    <div class="err" id="err"></div>
+
+    <div class="result" id="result" hidden>
+      <div><b>Link ready</b> <span class="hint" id="result-meta"></span></div>
+      <div class="linkrow">
+        <input type="text" id="link" readonly>
+        <button class="btn" id="copy">Copy</button>
+        <a class="btn" id="open" target="_blank" rel="noopener">Open</a>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec"><span>Active shares</span><button class="btn ghost small" id="refresh">↻ Refresh</button></h2>
+  <div class="shares" id="shares"></div>
+  <p class="hint" id="shares-empty" hidden>No active shares.</p>
+
+  <script src="/aio-sdk.js"></script>
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const err = (m) => ($("#err").textContent = m || "");
+    const fmt = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB`
+      : n < 1073741824 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1073741824).toFixed(2)} GB`;
+    const el = (tag, attrs = {}, ...kids) => {
+      const e = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs)) k === "class" ? (e.className = v) : (e[k] = v);
+      e.append(...kids);
+      return e;
+    };
+
+    let base = location.origin;
+    fetch("/api/config").then((r) => r.json()).then((c) => { if (c.public_url) base = c.public_url.replace(/\/+$/, ""); render(); }).catch(() => {});
+    const linkFor = (id) => `${base}/files/${id}`;
+
+    async function copy(text, btn) {
+      try { await navigator.clipboard.writeText(text); }
+      catch {
+        const t = el("textarea", { value: text }); document.body.append(t); t.select();
+        document.execCommand("copy"); t.remove();
+      }
+      const old = btn.textContent; btn.textContent = "Copied ✓";
+      setTimeout(() => (btn.textContent = old), 1500);
+    }
+
+    // ---------- picking files
+    let files = [];
+    function addFiles(list) {
+      err();
+      for (const f of list) if (!files.some((x) => x.name === f.name && x.size === f.size)) files.push(f);
+      renderFiles();
+    }
+    function renderFiles() {
+      $("#files").replaceChildren(...files.map((f, i) => {
+        const rm = el("button", { class: "btn ghost small", type: "button", title: "Remove", textContent: "✕" });
+        rm.onclick = () => { files.splice(i, 1); renderFiles(); };
+        return el("div", { class: "fcard" }, el("span", { class: "nm", textContent: f.name, title: f.name }),
+          el("span", { class: "hint", textContent: fmt(f.size) }), rm);
+      }));
+      const total = files.reduce((a, f) => a + f.size, 0);
+      $("#go").disabled = !files.length;
+      $("#go").textContent = files.length ? `Create link (${files.length} file${files.length > 1 ? "s" : ""}, ${fmt(total)})` : "Create link";
+    }
+    $("#picker").addEventListener("change", (e) => { addFiles([...e.target.files]); e.target.value = ""; });
+    const drop = $("#drop");
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); addFiles([...e.dataTransfer.files]); });
+
+    // ---------- upload
+    $("#go").addEventListener("click", () => {
+      err();
+      if (!files.length) return err("Add at least one file.");
+      const fd = new FormData();
+      fd.append("expires", $("#expires").value);
+      if ($("#password").value) fd.append("password", $("#password").value);
+      if ($("#note").value.trim()) fd.append("note", $("#note").value.trim());
+      for (const f of files) fd.append("files", f, f.name);
+
+      const go = $("#go"), bar = $("#bar"), fill = bar.firstElementChild;
+      go.disabled = true; bar.hidden = false; fill.style.width = "0%";
+      $("#result").hidden = true;
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/shares");
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = (e.loaded / e.total) * 100;
+        fill.style.width = pct.toFixed(1) + "%";
+        $("#progress").textContent = `Uploading… ${pct.toFixed(0)}% (${fmt(e.loaded)} of ${fmt(e.total)})`;
+      };
+      xhr.upload.onload = () => ($("#progress").textContent = "Finishing…");
+      const done = () => { go.disabled = !files.length; bar.hidden = true; $("#progress").textContent = ""; };
+      xhr.onload = () => {
+        done();
+        let body = {};
+        try { body = JSON.parse(xhr.responseText); } catch {}
+        if (xhr.status >= 300) return err(body.error || `Upload failed (${xhr.status} ${xhr.statusText})`);
+        const url = linkFor(body.id);
+        $("#link").value = url; $("#open").href = url;
+        $("#result-meta").textContent = `${body.files.length} file${body.files.length > 1 ? "s" : ""} · ${fmt(body.size)} · ${body.expires ? "expires in " + left(body.expires) : "never expires"}${body.has_password ? " · 🔒" : ""}`;
+        $("#result").hidden = false;
+        files = []; renderFiles();
+        $("#password").value = ""; $("#note").value = "";
+        load();
+      };
+      xhr.onerror = () => { done(); err("Network error"); };
+      xhr.send(fd);
+    });
+    $("#copy").addEventListener("click", (e) => copy($("#link").value, e.currentTarget));
+
+    // ---------- active shares
+    function left(iso) {
+      const ms = new Date(iso) - Date.now();
+      if (ms <= 0) return "expired";
+      const m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+      return d >= 2 ? `${d} days` : h >= 1 ? `${h} h ${m % 60} min` : `${Math.max(m, 1)} min`;
+    }
+    const when = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+    let shares = [];
+    async function load() {
+      try {
+        const r = await fetch("/api/shares");
+        shares = (await r.json()).shares || [];
+      } catch (e) { err("Could not load shares: " + e.message); }
+      render();
+    }
+    function render() {
+      $("#shares").replaceChildren(...shares.map((s) => {
+        const url = linkFor(s.id);
+        const title = s.files.length === 1 ? s.files[0].name : `${s.files.length} files`;
+        const open = el("a", { class: "btn small", href: url, target: "_blank", rel: "noopener", textContent: "Open" });
+        const cp = el("button", { class: "btn small", type: "button", textContent: "Copy" });
+        cp.onclick = () => copy(url, cp);
+        const del = el("button", { class: "btn small danger", type: "button", textContent: "Delete" });
+        del.onclick = async () => {
+          if (!confirm(`Delete this share (${title})? The link will stop working.`)) return;
+          const r = await fetch(`/api/shares/${encodeURIComponent(s.id)}`, { method: "DELETE" });
+          if (!r.ok) err("Delete failed: " + r.status);
+          load();
+        };
+        const exp = s.expires ? left(s.expires) : "never expires";
+        const soon = s.expires && new Date(s.expires) - Date.now() < 3600000;
+        const card = el("div", { class: "card share" },
+          el("div", { class: "top" },
+            el("span", { class: "nm", title, textContent: (s.has_password ? "🔒 " : "") + title }),
+            open, cp, del),
+          el("div", { class: "hint" },
+            `${fmt(s.size)} · created ${when(s.created)} · `,
+            el("span", { class: soon ? "soon" : "", textContent: s.expires ? `${exp} left` : exp })));
+        if (s.files.length > 1) card.append(el("div", { class: "flist", textContent: s.files.map((f) => `${f.name} (${fmt(f.size)})`).join(" · ") }));
+        if (s.note) card.append(el("div", { class: "note", textContent: s.note }));
+        return card;
+      }));
+      $("#shares-empty").hidden = shares.length > 0;
+    }
+    $("#refresh").addEventListener("click", load);
+    setInterval(render, 60000);
+    load();
+  </script>
+</body>
+</html>
