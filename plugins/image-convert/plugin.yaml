@@ -26,5 +26,5 @@ inputs:
     options: [{value: none, label: No resizing}, {value: long, label: Longest side (px)}, {value: width, label: Width (px)}, {value: percent, label: Percent}]
   - {name: size, label: Pixels, type: number, default: 2048, min: 16, max: 20000, show_if: {resize: [long, width]}}
   - {name: percent, label: Percent, type: number, default: 50, min: 1, max: 100, show_if: {resize: [percent]}}
-  - {name: strip, label: Strip metadata (EXIF, GPS location, camera info), type: checkbox, default: true}
+  - {name: strip, label: "Strip metadata (EXIF, GPS location, camera info)", type: checkbox, default: true}
   - {name: zip, label: Bundle into a .zip when there are several images, type: checkbox, default: true}
