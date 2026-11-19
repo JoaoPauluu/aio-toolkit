@@ -20,6 +20,30 @@ Then open `http://<host>:8080`. Set `PUID`/`PGID` and `AIO_PORT` in a `.env` fil
 
 The app has **no authentication**. Put it behind your reverse proxy or VPN (Tailscale, Authelia, a Traefik/Caddy forward-auth setup, …). For Server-Sent Events through nginx, the app already sends `X-Accel-Buffering: no`.
 
+## Deploy the prebuilt image
+
+GitHub Actions builds `ghcr.io/joaopauluu/aio-toolkit` for amd64 and arm64. It rebuilds on every push to `main`, on `v*` tags, and once a week so yt-dlp and ffmpeg stay fresh. Add this service to your stack:
+
+```yaml
+  aio-toolkit:
+    image: ghcr.io/joaopauluu/aio-toolkit:latest
+    container_name: aio-toolkit
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "8765:8080"
+    environment:
+      AIO_MAX_JOBS: 2
+      AIO_JOB_TTL: 24h
+    volumes:
+      - aio-data:/data
+      - ./aio/downloads:/downloads
+      - ./aio/plugins:/plugins
+    mem_limit: 768m
+```
+
+You also need `aio-data:` under the stack's top-level `volumes:` key. Create `./aio/downloads` and `./aio/plugins` yourself first, so your user owns them. Then update with `docker compose pull aio-toolkit && docker compose up -d aio-toolkit`.
+
 ## Architecture
 
 ```
