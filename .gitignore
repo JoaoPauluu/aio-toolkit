@@ -1,0 +1,6 @@
+data/
+downloads/
+web/static/vendor/*
+!web/static/vendor/README.md
+/aio
+.env

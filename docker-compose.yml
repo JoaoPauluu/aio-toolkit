@@ -1,0 +1,19 @@
+services:
+  aio:
+    build: .
+    image: aio-toolkit:latest
+    container_name: aio-toolkit
+    restart: unless-stopped
+    # Run as your user so files in ./downloads and ./data are owned by you.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${AIO_PORT:-8080}:8080"   # remove if your reverse proxy reaches the container over a docker network
+    environment:
+      AIO_MAX_JOBS: 2              # concurrent jobs
+      AIO_JOB_TTL: 24h             # finished jobs (and their files) are deleted after this
+      AIO_MAX_UPLOAD_MB: 4096
+    volumes:
+      - ./plugins:/plugins         # your plugins; same id as a built-in overrides it. Edits are picked up live.
+      - ./data:/data               # job files, history, updated yt-dlp
+      - ./downloads:/downloads     # yt-dlp "library" downloads
+    mem_limit: 768m                # guard rail for heavy ffmpeg/ghostscript jobs; idle use is ~10-20 MB

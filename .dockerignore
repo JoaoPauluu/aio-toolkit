@@ -1,0 +1,5 @@
+data
+downloads
+.git
+*.md
+!README.md

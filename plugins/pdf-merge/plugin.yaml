@@ -1,0 +1,17 @@
+id: pdf-merge
+name: Merge & Reorder PDF
+category: PDF
+icon: "📑"
+description: Combine several PDFs in any order, or rearrange, rotate and remove individual pages.
+run: [python3, run.py]
+ui: ui/index.html
+timeout: 30m
+inputs:
+  - name: files
+    type: file
+    accept: .pdf,application/pdf
+    multiple: true
+    required: true
+  - name: output_name
+    type: text
+    default: merged.pdf

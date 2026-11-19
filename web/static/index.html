@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIO Toolkit</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧰</text></svg>">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <a href="#/" class="brand-link">🧰 <span>AIO Toolkit</span></a>
+      <button id="menu-close" class="icon-btn only-mobile" aria-label="Close menu">✕</button>
+    </div>
+    <input id="search" type="search" placeholder="Search tools…" autocomplete="off">
+    <nav id="nav"></nav>
+    <div class="sidebar-foot">
+      <button id="reload" class="btn ghost small" title="Rescan plugin folders">↻ Reload plugins</button>
+      <div id="plugin-errors"></div>
+    </div>
+  </aside>
+
+  <main id="main">
+    <header class="topbar only-mobile">
+      <button id="menu-open" class="icon-btn" aria-label="Open menu">☰</button>
+      <span id="topbar-title">AIO Toolkit</span>
+      <button class="icon-btn jobs-toggle" aria-label="Jobs">⏳<span class="badge" hidden></span></button>
+    </header>
+    <section id="view"></section>
+  </main>
+
+  <aside id="jobs">
+    <div class="jobs-head">
+      <h2>Jobs</h2>
+      <div>
+        <button id="clear-done" class="btn ghost small" title="Remove finished jobs">Clear finished</button>
+        <button class="icon-btn jobs-toggle only-mobile" aria-label="Close jobs">✕</button>
+      </div>
+    </div>
+    <div id="job-list"><p class="muted empty">No jobs yet.</p></div>
+  </aside>
+
+  <script src="/app.js"></script>
+</body>
+</html>

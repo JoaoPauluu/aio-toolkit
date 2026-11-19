@@ -1,0 +1,38 @@
+id: pdf-split
+name: Split PDF
+category: PDF
+icon: "✂️"
+description: Split a PDF into single pages or into custom page ranges.
+run: [python3, run.py]
+submit_label: Split
+timeout: 30m
+inputs:
+  - name: files
+    label: PDF files
+    type: file
+    accept: .pdf,application/pdf
+    multiple: true
+    required: true
+  - name: mode
+    label: Split mode
+    type: select
+    default: pages
+    options:
+      - {value: pages, label: "Every page into its own file"}
+      - {value: ranges, label: "Custom ranges"}
+      - {value: chunks, label: "Every N pages"}
+  - name: ranges
+    label: Ranges
+    placeholder: "1-3, 4-7, 8-z"
+    help: Comma-separated; each range becomes one file. "z" means the last page, e.g. "1-3, 5, 9-z".
+    show_if: {mode: [ranges]}
+  - name: chunk
+    label: Pages per file
+    type: number
+    default: 10
+    min: 1
+    show_if: {mode: [chunks]}
+  - name: zip
+    label: Bundle results into a single .zip
+    type: checkbox
+    default: false

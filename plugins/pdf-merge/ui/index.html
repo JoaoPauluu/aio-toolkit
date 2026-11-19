@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Merge &amp; Reorder PDF</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { background: transparent; padding: 2px; }
+    .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }
+    .tab { border: 0; background: none; color: var(--muted); padding: 8px 14px; font: inherit; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .tab.active { color: var(--accent); border-color: var(--accent); font-weight: 600; }
+    .panel { padding: 16px; display: grid; gap: 14px; }
+    .files { display: grid; gap: 6px; }
+    .fcard { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--panel-2); border-radius: 8px; }
+    .fcard .grip { cursor: grab; color: var(--muted); user-select: none; font-size: 16px; touch-action: none; }
+    .fcard .num { color: var(--muted); width: 22px; text-align: right; font-variant-numeric: tabular-nums; }
+    .fcard .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
+    .page { background: var(--panel-2); border-radius: 8px; padding: 8px; text-align: center; cursor: grab; position: relative; user-select: none; }
+    .page .thumb { height: 150px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .page canvas { max-width: 100%; max-height: 150px; box-shadow: 0 1px 4px rgba(0,0,0,.25); background: #fff; transition: transform .2s; }
+    .page .meta { font-size: 11px; color: var(--muted); margin-top: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .page .tools { display: flex; justify-content: center; gap: 2px; margin-top: 4px; }
+    .page .idx { position: absolute; top: 4px; left: 6px; font-size: 11px; font-weight: 700; color: var(--muted); }
+    .sortable-ghost { opacity: .35; }
+    .sortable-chosen { outline: 2px solid var(--accent); }
+    .row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+    .row .field { flex: 1; min-width: 200px; }
+    .hint { font-size: 12px; color: var(--muted); }
+    .err { color: var(--err); font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="tabs">
+    <button class="tab active" data-tab="files">Merge files</button>
+    <button class="tab" data-tab="pages">Reorder pages</button>
+  </div>
+
+  <div class="card panel">
+    <label class="dropzone" id="drop">
+      <input type="file" id="picker" accept=".pdf,application/pdf" multiple>
+      <div>📂 Drop PDF files here or click to browse</div>
+      <div class="small" id="drop-hint">Add several PDFs, then drag them into the order you want.</div>
+    </label>
+
+    <section id="tab-files">
+      <div class="files" id="files"></div>
+      <p class="hint" id="files-empty">No files yet.</p>
+    </section>
+
+    <section id="tab-pages" hidden>
+      <div class="row" style="margin-bottom:10px">
+        <span class="hint" style="flex:1">Drag pages to reorder · ⟳ rotates · ✕ removes. Pages from every added file are shown.</span>
+        <button class="btn small" id="reset-pages">Reset pages</button>
+      </div>
+      <div class="grid" id="pages"></div>
+      <p class="hint" id="pages-empty">Add a PDF to see its pages.</p>
+    </section>
+
+    <div class="row">
+      <div class="field">
+        <label class="lbl" for="outname">Output file name</label>
+        <input type="text" id="outname" value="merged.pdf">
+      </div>
+      <button class="btn primary" id="go" disabled>Merge</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <script src="/vendor/Sortable.min.js"></script>
+  <script src="/aio-sdk.js"></script>
+  <script type="module">
+    const $ = (s) => document.querySelector(s);
+    const err = (m) => ($("#err").textContent = m || "");
+    const fmt = (n) => n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+    let pdfjs = null;
+    try {
+      pdfjs = await import("/vendor/pdf.min.mjs");
+      pdfjs.GlobalWorkerOptions.workerSrc = "/vendor/pdf.worker.min.mjs";
+    } catch (e) {
+      err("Page previews unavailable (pdf.js not bundled). File merging still works.");
+    }
+
+    let uid = 0;
+    const files = [];   // {id, file, doc, pages}
+    let pages = null;   // [{fid, page, rotate}] — null until the pages tab is first used
+    let tab = "files";
+
+    // ---------- files
+    async function addFiles(list) {
+      err();
+      for (const file of list) {
+        if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") { err(`${file.name} is not a PDF`); continue; }
+        const f = { id: ++uid, file, doc: null, pages: null };
+        files.push(f);
+        if (pdfjs) {
+          try {
+            f.doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+            f.pages = f.doc.numPages;
+          } catch (e) { err(`Could not read ${file.name}: ${e.message}`); }
+        }
+        if (pages && f.pages) for (let i = 1; i <= f.pages; i++) pages.push({ fid: f.id, page: i, rotate: 0 });
+      }
+      render();
+    }
+    function removeFile(id) {
+      const i = files.findIndex((f) => f.id === id);
+      if (i >= 0) { files[i].doc?.destroy(); files.splice(i, 1); }
+      if (pages) pages = pages.filter((p) => p.fid !== id);
+      render();
+    }
+
+    $("#picker").addEventListener("change", (e) => { addFiles([...e.target.files]); e.target.value = ""; });
+    const drop = $("#drop");
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); addFiles([...e.dataTransfer.files]); });
+
+    // ---------- tabs
+    document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => {
+      tab = b.dataset.tab;
+      document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === b));
+      if (tab === "pages" && !pages) resetPages();
+      render();
+    }));
+    function resetPages() {
+      pages = [];
+      for (const f of files) for (let i = 1; i <= (f.pages || 0); i++) pages.push({ fid: f.id, page: i, rotate: 0 });
+    }
+    $("#reset-pages").addEventListener("click", () => { resetPages(); render(); });
+
+    // ---------- render
+    const fileList = $("#files"), grid = $("#pages");
+    if (window.Sortable) {
+      Sortable.create(fileList, { animation: 150, handle: ".grip", onEnd: (e) => {
+        const [m] = files.splice(e.oldIndex, 1); files.splice(e.newIndex, 0, m); render();
+      } });
+      Sortable.create(grid, { animation: 150, filter: ".btn", preventOnFilter: false, onEnd: (e) => {
+        const [m] = pages.splice(e.oldIndex, 1); pages.splice(e.newIndex, 0, m); render();
+      } });
+    }
+
+    function btn(label, title, onclick) {
+      const b = document.createElement("button");
+      b.className = "btn ghost small"; b.type = "button"; b.textContent = label; b.title = title;
+      b.addEventListener("click", (e) => { e.stopPropagation(); onclick(); });
+      return b;
+    }
+
+    function render() {
+      $("#tab-files").hidden = tab !== "files";
+      $("#tab-pages").hidden = tab !== "pages";
+      $("#drop-hint").textContent = tab === "files"
+        ? "Add several PDFs, then drag them into the order you want."
+        : "Add one or more PDFs, then rearrange, rotate or remove their pages.";
+
+      fileList.replaceChildren(...files.map((f, i) => {
+        const row = document.createElement("div");
+        row.className = "fcard";
+        row.innerHTML = `<span class="grip" title="Drag to reorder">⠿</span><span class="num">${i + 1}.</span>
+          <span class="nm"></span><span class="hint">${f.pages ? f.pages + " p · " : ""}${fmt(f.file.size)}</span>`;
+        row.querySelector(".nm").textContent = f.file.name;
+        row.querySelector(".nm").title = f.file.name;
+        const up = btn("↑", "Move up", () => { if (i > 0) { files.splice(i - 1, 0, files.splice(i, 1)[0]); render(); } });
+        const down = btn("↓", "Move down", () => { if (i < files.length - 1) { files.splice(i + 1, 0, files.splice(i, 1)[0]); render(); } });
+        row.append(up, down, btn("✕", "Remove", () => removeFile(f.id)));
+        return row;
+      }));
+      $("#files-empty").hidden = files.length > 0;
+
+      if (tab === "pages" && pages) renderPages();
+
+      const n = tab === "files" ? files.length : (pages?.length || 0);
+      const go = $("#go");
+      go.disabled = tab === "files" ? n < 1 : n < 1;
+      go.textContent = tab === "files" ? (files.length > 1 ? `Merge ${files.length} files` : "Merge") : `Create PDF (${n} pages)`;
+    }
+
+    // Thumbnails render lazily as they scroll into view; canvases are cached per page.
+    const thumbCache = new Map(); // "fid:page" -> canvas
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting) { io.unobserve(e.target); drawThumb(e.target); }
+    }, { rootMargin: "300px" });
+
+    async function drawThumb(holder) {
+      const key = holder.dataset.key;
+      if (thumbCache.has(key)) return holder.replaceChildren(thumbCache.get(key));
+      const [fid, pg] = key.split(":").map(Number);
+      const f = files.find((x) => x.id === fid);
+      if (!f?.doc) return;
+      const page = await f.doc.getPage(pg);
+      const vp0 = page.getViewport({ scale: 1 });
+      const scale = 150 / Math.max(vp0.width, vp0.height) * (window.devicePixelRatio || 1);
+      const vp = page.getViewport({ scale });
+      const c = document.createElement("canvas");
+      c.width = vp.width; c.height = vp.height;
+      await page.render({ canvasContext: c.getContext("2d"), viewport: vp }).promise;
+      thumbCache.set(key, c);
+      holder.replaceChildren(c);
+      applyRotation(holder);
+    }
+    const applyRotation = (holder) => {
+      const c = holder.querySelector("canvas");
+      if (c) c.style.transform = `rotate(${holder.dataset.rot}deg)`;
+    };
+
+    function renderPages() {
+      const nameOf = (fid) => files.find((f) => f.id === fid)?.file.name || "?";
+      const multi = new Set(pages.map((p) => p.fid)).size > 1;
+      grid.replaceChildren(...pages.map((p, i) => {
+        const card = document.createElement("div");
+        card.className = "page";
+        const holder = document.createElement("div");
+        holder.className = "thumb";
+        holder.dataset.key = `${p.fid}:${p.page}`;
+        holder.dataset.rot = p.rotate;
+        holder.textContent = "…";
+        const idx = document.createElement("span");
+        idx.className = "idx"; idx.textContent = i + 1;
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = (multi ? nameOf(p.fid) + " · " : "") + "p." + p.page;
+        meta.title = nameOf(p.fid);
+        const tools = document.createElement("div");
+        tools.className = "tools";
+        tools.append(
+          btn("⟲", "Rotate left", () => { p.rotate = (p.rotate + 270) % 360; holder.dataset.rot = p.rotate; applyRotation(holder); }),
+          btn("⟳", "Rotate right", () => { p.rotate = (p.rotate + 90) % 360; holder.dataset.rot = p.rotate; applyRotation(holder); }),
+          btn("✕", "Remove page", () => { pages.splice(pages.indexOf(p), 1); render(); }),
+        );
+        card.append(idx, holder, meta, tools);
+        if (thumbCache.has(holder.dataset.key)) { holder.replaceChildren(thumbCache.get(holder.dataset.key)); applyRotation(holder); }
+        else io.observe(holder);
+        return card;
+      }));
+      $("#pages-empty").hidden = pages.length > 0;
+    }
+
+    // ---------- submit
+    $("#go").addEventListener("click", async () => {
+      err();
+      const go = $("#go");
+      let upload, params = {};
+      if (tab === "files") {
+        upload = files;
+      } else {
+        const used = files.filter((f) => pages.some((p) => p.fid === f.id));
+        const index = new Map(used.map((f, i) => [f.id, i]));
+        upload = used;
+        params.pages = pages.map((p) => ({ file: index.get(p.fid), page: p.page, rotate: p.rotate }));
+      }
+      if (!upload.length) return err("Add at least one PDF.");
+      go.disabled = true;
+      try {
+        await AIO.submit({
+          files: { files: upload.map((f) => f.file) },
+          fields: { output_name: $("#outname").value || "merged.pdf" },
+          params,
+          title: upload.map((f) => f.file.name).join(" + "),
+        });
+      } catch (e) { err(e.message); }
+      finally { go.disabled = false; }
+    });
+
+    render();
+  </script>
+</body>
+</html>

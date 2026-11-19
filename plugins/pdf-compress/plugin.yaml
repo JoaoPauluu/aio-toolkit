@@ -1,0 +1,28 @@
+id: pdf-compress
+name: Compress PDF
+category: PDF
+icon: "🗜️"
+description: Shrink PDF files with Ghostscript. Keeps the original if compression doesn't help.
+run: [python3, run.py]
+submit_label: Compress
+timeout: 1h
+inputs:
+  - name: files
+    label: PDF files
+    type: file
+    accept: .pdf,application/pdf
+    multiple: true
+    required: true
+  - name: quality
+    label: Quality
+    type: select
+    default: ebook
+    options:
+      - {value: screen, label: "Smallest (72 dpi images)"}
+      - {value: ebook, label: "Balanced (150 dpi images)"}
+      - {value: printer, label: "High quality (300 dpi images)"}
+      - {value: prepress, label: "Prepress (300 dpi, color preserving)"}
+  - name: grayscale
+    label: Convert to grayscale
+    type: checkbox
+    default: false

@@ -1,0 +1,16 @@
+id: ytdlp-update
+name: Update yt-dlp
+category: Media
+icon: "🔄"
+description: Upgrade yt-dlp in place (sites change often). Installs into the data volume, no image rebuild needed.
+run: [sh, run.sh]
+submit_label: Update now
+timeout: 15m
+inputs:
+  - name: channel
+    label: Channel
+    type: select
+    default: stable
+    options:
+      - {value: stable, label: Stable release}
+      - {value: nightly, label: Nightly (pre-release)}

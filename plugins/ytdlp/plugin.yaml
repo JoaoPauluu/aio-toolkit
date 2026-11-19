@@ -1,0 +1,72 @@
+id: ytdlp
+name: Video / Audio Downloader
+category: Media
+icon: "🎬"
+description: Download from YouTube and 1000+ sites with yt-dlp, converted to MP4 or MP3 with ffmpeg.
+run: [python3, run.py]
+submit_label: Download
+timeout: 4h
+inputs:
+  - name: urls
+    label: URLs
+    type: textarea
+    required: true
+    placeholder: "https://www.youtube.com/watch?v=…\n(one per line)"
+  - name: format
+    label: Format
+    type: select
+    default: mp4
+    options:
+      - {value: mp4, label: "Video · MP4 (H.264/AAC preferred)"}
+      - {value: mp3, label: "Audio · MP3"}
+      - {value: m4a, label: "Audio · M4A (no re-encode when possible)"}
+      - {value: best, label: "Best original (no conversion)"}
+  - name: quality
+    label: Max video resolution
+    type: select
+    default: "1080"
+    options:
+      - {value: best, label: Best available}
+      - {value: "2160", label: 2160p (4K)}
+      - {value: "1440", label: 1440p}
+      - {value: "1080", label: 1080p}
+      - {value: "720", label: 720p}
+      - {value: "480", label: 480p}
+    show_if: {format: [mp4, best]}
+  - name: recode
+    label: Force re-encode to H.264/AAC (slow, maximum compatibility)
+    type: checkbox
+    default: false
+    show_if: {format: [mp4]}
+  - name: bitrate
+    label: MP3 quality
+    type: select
+    default: "0"
+    options:
+      - {value: "0", label: "Best VBR (~245 kbps)"}
+      - {value: "320K", label: "320 kbps CBR"}
+      - {value: "192K", label: "192 kbps"}
+      - {value: "128K", label: "128 kbps"}
+    show_if: {format: [mp3]}
+  - name: playlist
+    label: Download whole playlist if the URL is one
+    type: checkbox
+    default: false
+  - name: metadata
+    label: Embed metadata, chapters & thumbnail
+    type: checkbox
+    default: true
+  - name: subs
+    label: Embed subtitles (en)
+    type: checkbox
+    default: false
+    show_if: {format: [mp4, best]}
+  - name: library
+    label: Save to server library (/downloads) instead of browser download
+    type: checkbox
+    default: false
+  - name: cookies
+    label: cookies.txt (optional)
+    type: file
+    accept: .txt
+    help: Netscape-format cookies for age-restricted or members-only videos.
