@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 
+# Set automatically by BuildKit/buildx; the default keeps the classic builder working.
+ARG BUILDPLATFORM=linux/amd64
+
 # ---- build the Go server (single static binary) ----
-FROM golang:1.25-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -13,7 +16,8 @@ ADD https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs        web
 ADD https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs web/static/vendor/pdf.worker.min.mjs
 ADD https://cdn.jsdelivr.net/npm/sortablejs@1.15.6/Sortable.min.js           web/static/vendor/Sortable.min.js
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/aio ./cmd/aio
+ARG TARGETOS=linux TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/aio ./cmd/aio
 
 # ---- runtime: tools the plugins call ----
 FROM python:3.13-alpine
