@@ -242,22 +242,21 @@
     $("#go").addEventListener("click", async () => {
       err();
       const go = $("#go");
-      let upload, params = {};
+      let upload, pagesJSON = "";
       if (tab === "files") {
         upload = files;
       } else {
         const used = files.filter((f) => pages.some((p) => p.fid === f.id));
         const index = new Map(used.map((f, i) => [f.id, i]));
         upload = used;
-        params.pages = pages.map((p) => ({ file: index.get(p.fid), page: p.page, rotate: p.rotate }));
+        pagesJSON = JSON.stringify(pages.map((p) => ({ file: index.get(p.fid), page: p.page, rotate: p.rotate })));
       }
       if (!upload.length) return err("Add at least one PDF.");
       go.disabled = true;
       try {
         await AIO.submit({
           files: { files: upload.map((f) => f.file) },
-          fields: { output_name: $("#outname").value || "merged.pdf" },
-          params,
+          fields: { output_name: $("#outname").value || "merged.pdf", ...(pagesJSON && { pages: pagesJSON }) },
           title: upload.map((f) => f.file.name).join(" + "),
         });
       } catch (e) { err(e.message); }

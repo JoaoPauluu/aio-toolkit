@@ -3,6 +3,7 @@ package server
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"ok": true, "version": s.Version})
 	})
 	mux.HandleFunc("GET /api/plugins", s.listPlugins)
+	mux.HandleFunc("GET /api/plugins/{id}", s.getPlugin)
 	mux.HandleFunc("POST /api/plugins/reload", func(w http.ResponseWriter, r *http.Request) {
 		s.Registry.Reload()
 		s.listPlugins(w, r)
@@ -51,11 +53,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"jobs": s.Jobs.List()})
 	})
-	mux.HandleFunc("GET /api/jobs/{id}", s.withJob(func(w http.ResponseWriter, r *http.Request, j *jobs.Job) {
-		writeJSON(w, 200, j.Snapshot(true))
-	}))
+	mux.HandleFunc("GET /api/jobs/{id}", s.withJob(s.getJob))
 	mux.HandleFunc("GET /api/jobs/{id}/events", s.withJob(s.jobEvents))
-	mux.HandleFunc("GET /api/jobs/{id}/files/{name...}", s.withJob(s.jobFile))
+	mux.HandleFunc("GET /api/jobs/{id}/files/{name...}", s.withJob(func(w http.ResponseWriter, r *http.Request, j *jobs.Job) {
+		s.serveJobFile(w, r, j, r.PathValue("name"))
+	}))
 	mux.HandleFunc("GET /api/jobs/{id}/zip", s.withJob(s.jobZip))
 	mux.HandleFunc("POST /api/jobs/{id}/cancel", s.withJob(func(w http.ResponseWriter, r *http.Request, j *jobs.Job) {
 		j.Cancel()
@@ -95,21 +97,41 @@ func (s *Server) Handler() http.Handler {
 	return logRequests(mux)
 }
 
+type pluginView struct {
+	*plugin.Manifest
+	UIURL  string `json:"ui_url,omitempty"`
+	RunURL string `json:"run_url,omitempty"`
+}
+
+func newPluginView(m *plugin.Manifest) pluginView {
+	v := pluginView{Manifest: m}
+	if m.UI != "" {
+		v.UIURL = "/p/" + m.ID + "/" + m.UI
+	}
+	if len(m.Run) > 0 {
+		v.RunURL = "/api/plugins/" + m.ID + "/run"
+	}
+	return v
+}
+
 func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 	list, errs := s.Registry.List()
-	type view struct {
-		*plugin.Manifest
-		UIURL string `json:"ui_url,omitempty"`
-	}
-	out := make([]view, 0, len(list))
+	out := make([]pluginView, 0, len(list))
 	for _, m := range list {
-		v := view{Manifest: m}
-		if m.UI != "" {
-			v.UIURL = "/p/" + m.ID + "/" + m.UI
-		}
-		out = append(out, v)
+		out = append(out, newPluginView(m))
 	}
 	writeJSON(w, 200, map[string]any{"plugins": out, "errors": errs})
+}
+
+// getPlugin returns one plugin's schema: its inputs with types, defaults,
+// options, limits and show_if rules — everything needed to call it.
+func (s *Server) getPlugin(w http.ResponseWriter, r *http.Request) {
+	p := s.Registry.Get(r.PathValue("id"))
+	if p == nil {
+		httpError(w, 404, "plugin not found")
+		return
+	}
+	writeJSON(w, 200, newPluginView(p))
 }
 
 // runPlugin streams a multipart upload to disk, builds params and starts a job.
@@ -182,6 +204,12 @@ func (s *Server) runPlugin(w http.ResponseWriter, r *http.Request) {
 			}
 			values[field] = append(values[field], string(b))
 		}
+	} else if isJSON(r.Header.Get("Content-Type")) {
+		values, err = jsonValues(p, http.MaxBytesReader(w, r.Body, 4<<20))
+		if err != nil {
+			httpError(w, 400, "invalid JSON body: "+err.Error())
+			return
+		}
 	} else if err := r.ParseForm(); err == nil {
 		values = r.PostForm
 	}
@@ -213,7 +241,11 @@ func (s *Server) runPlugin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	started = true
-	writeJSON(w, 201, j.Snapshot(false))
+	if wait, ok := waitParam(r, p.Timeout); ok {
+		s.waitAndRespond(w, r, j, wait)
+		return
+	}
+	writeJSON(w, 201, newJobView(j.Snapshot(false)))
 }
 
 func saveFile(dst string, r io.Reader) error {
@@ -266,8 +298,30 @@ func buildParams(p *plugin.Manifest, values map[string][]string, files map[strin
 	}
 	for _, in := range p.Inputs {
 		raw, has := values[in.Name]
+		// Mirror the web form: fields hidden by show_if are not sent (except
+		// files and checkboxes, which the form always sends), so they get
+		// their default and aren't required.
+		if !shown(p, &in, values) && in.Type != "file" && in.Type != "checkbox" {
+			raw, has = nil, false
+			in.Required = false
+		}
 		val := strings.TrimSpace(first(raw))
 		switch in.Type {
+		case "json":
+			if !has || val == "" {
+				if in.Required && params[in.Name] == nil {
+					return nil, fmt.Errorf("%s is required", in.Label)
+				}
+				if _, set := params[in.Name]; !set { // may come from __params (older custom UIs)
+					params[in.Name] = in.Default
+				}
+				continue
+			}
+			var v any
+			if err := json.Unmarshal([]byte(val), &v); err != nil {
+				return nil, fmt.Errorf("%s must be valid JSON: %v", in.Label, err)
+			}
+			params[in.Name] = v
 		case "file":
 			list := files[in.Name]
 			if list == nil {
@@ -333,6 +387,186 @@ func buildParams(p *plugin.Manifest, values map[string][]string, files map[strin
 	return params, nil
 }
 
+// shown reports whether in's show_if condition holds, evaluated like the web
+// form does: against the submitted value of each referenced field, or its
+// default when it wasn't submitted.
+func shown(p *plugin.Manifest, in *plugin.Input, values map[string][]string) bool {
+	for k, allowed := range in.ShowIf {
+		cur := ""
+		if v, ok := values[k]; ok {
+			cur = first(v)
+		} else if ref := p.Input(k); ref != nil {
+			switch {
+			case ref.Type == "checkbox":
+				b, _ := ref.Default.(bool)
+				cur = strconv.FormatBool(b)
+			case ref.Default != nil:
+				cur = fmt.Sprint(ref.Default)
+			}
+		}
+		if ref := p.Input(k); ref != nil && ref.Type == "checkbox" && cur != "" {
+			cur = strconv.FormatBool(cur == "true" || cur == "on" || cur == "1" || cur == "yes")
+		}
+		ok := false
+		for _, a := range allowed {
+			ok = ok || a == cur
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func isJSON(ct string) bool {
+	mt, _, _ := mime.ParseMediaType(ct)
+	return mt == "application/json"
+}
+
+// jsonValues turns a JSON object body into the same shape as form values, so
+// a JSON request and a form request build identical params. Values of "json"
+// inputs (and __params) are passed as JSON text, as the form sends them.
+func jsonValues(p *plugin.Manifest, body io.Reader) (map[string][]string, error) {
+	dec := json.NewDecoder(body)
+	dec.UseNumber()
+	var obj map[string]any
+	if err := dec.Decode(&obj); err != nil {
+		return nil, err
+	}
+	values := map[string][]string{}
+	for k, v := range obj {
+		if v == nil {
+			continue
+		}
+		if in := p.Input(k); k == "__params" || in != nil && in.Type == "json" {
+			b, _ := json.Marshal(v)
+			values[k] = []string{string(b)}
+			continue
+		}
+		if in := p.Input(k); in != nil && in.Type == "file" {
+			return nil, fmt.Errorf("%s: files must be uploaded as multipart/form-data", k)
+		}
+		list, ok := v.([]any)
+		if !ok {
+			list = []any{v}
+		}
+		for _, e := range list {
+			switch e := e.(type) {
+			case string:
+				values[k] = append(values[k], e)
+			case json.Number:
+				values[k] = append(values[k], e.String())
+			case bool:
+				values[k] = append(values[k], strconv.FormatBool(e))
+			default:
+				b, _ := json.Marshal(e)
+				values[k] = append(values[k], string(b))
+			}
+		}
+	}
+	return values, nil
+}
+
+// waitParam parses ?wait= as a Go duration ("90s", "5m") or plain seconds,
+// capped at max.
+func waitParam(r *http.Request, max time.Duration) (time.Duration, bool) {
+	raw := r.URL.Query().Get("wait")
+	if raw == "" {
+		return 0, false
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		n, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			return 0, false
+		}
+		d = time.Duration(n * float64(time.Second))
+	}
+	if d <= 0 {
+		return 0, false
+	}
+	if max > 0 && d > max {
+		d = max
+	}
+	return d, true
+}
+
+type fileView struct {
+	jobs.File
+	URL string `json:"url"`
+}
+
+// jobView is a job snapshot whose files carry download URLs.
+type jobView struct {
+	jobs.Snapshot
+	Files []fileView `json:"files"`
+}
+
+func newJobView(s jobs.Snapshot) jobView {
+	v := jobView{Snapshot: s, Files: make([]fileView, 0, len(s.Files))}
+	for _, f := range s.Files {
+		v.Files = append(v.Files, fileView{File: f, URL: jobFileURL(s.ID, f.Name)})
+	}
+	return v
+}
+
+func jobFileURL(id, name string) string {
+	parts := strings.Split(name, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return "/api/jobs/" + id + "/files/" + strings.Join(parts, "/")
+}
+
+func (s *Server) getJob(w http.ResponseWriter, r *http.Request, j *jobs.Job) {
+	if wait, ok := waitParam(r, 24*time.Hour); ok {
+		s.waitAndRespond(w, r, j, wait)
+		return
+	}
+	writeJSON(w, 200, newJobView(j.Snapshot(true)))
+}
+
+// waitAndRespond blocks until the job finishes (or wait elapses / the client
+// goes away; the job keeps running either way) and replies with:
+//   - 202 + job JSON if it's still running
+//   - with ?output=file: the output file itself (one output, or ?file=name),
+//     a zip of all outputs, or 422 + job JSON if the job didn't succeed
+//   - otherwise 200 + job JSON (with logs)
+func (s *Server) waitAndRespond(w http.ResponseWriter, r *http.Request, j *jobs.Job, wait time.Duration) {
+	ctx, cancel := context.WithTimeout(r.Context(), wait)
+	defer cancel()
+	snap := j.Wait(ctx)
+	if r.Context().Err() != nil {
+		return // client gone
+	}
+	if !snap.State.Finished() {
+		writeJSON(w, 202, newJobView(snap))
+		return
+	}
+	full := j.Snapshot(true)
+	if r.URL.Query().Get("output") != "file" {
+		writeJSON(w, 200, newJobView(full))
+		return
+	}
+	if full.State != jobs.Done {
+		if len(full.Logs) > 50 {
+			full.Logs = full.Logs[len(full.Logs)-50:]
+		}
+		writeJSON(w, 422, newJobView(full))
+		return
+	}
+	switch name := r.URL.Query().Get("file"); {
+	case name != "":
+		s.serveJobFile(w, r, j, name)
+	case len(full.Files) == 1:
+		s.serveJobFile(w, r, j, full.Files[0].Name)
+	case len(full.Files) > 1:
+		s.jobZip(w, r, j)
+	default: // e.g. saved to the server library: nothing to download
+		writeJSON(w, 200, newJobView(full))
+	}
+}
+
 func (s *Server) withJob(h func(http.ResponseWriter, *http.Request, *jobs.Job)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		j := s.Jobs.Get(r.PathValue("id"))
@@ -377,8 +611,8 @@ func (s *Server) jobEvents(w http.ResponseWriter, r *http.Request, j *jobs.Job) 
 	}
 }
 
-func (s *Server) jobFile(w http.ResponseWriter, r *http.Request, j *jobs.Job) {
-	p, err := s.Jobs.FilePath(j, r.PathValue("name"))
+func (s *Server) serveJobFile(w http.ResponseWriter, r *http.Request, j *jobs.Job, name string) {
+	p, err := s.Jobs.FilePath(j, name)
 	if err != nil {
 		httpError(w, 400, err.Error())
 		return

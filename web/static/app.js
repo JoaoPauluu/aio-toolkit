@@ -118,6 +118,7 @@
     const fields = [];
 
     for (const inp of p.inputs) {
+      if (inp.type === "json") continue; // structured data: set by custom UIs and API callers only
       const id = `f_${inp.name}`;
       let control;
       const label = el("label", { class: "lbl", for: id }, inp.label, inp.required ? el("span", { class: "req" }, " *") : null);

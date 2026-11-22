@@ -79,7 +79,7 @@ func (m *Manager) Create(p *plugin.Manifest) (*Job, error) {
 	j := &Job{dir: dir, snap: Snapshot{
 		ID: id, Plugin: p.ID, PluginName: p.Name, State: Queued,
 		Progress: -1, Files: []File{}, Created: time.Now(),
-	}}
+	}, done: make(chan struct{})}
 	return j, nil
 }
 

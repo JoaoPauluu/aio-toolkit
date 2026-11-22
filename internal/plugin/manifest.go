@@ -47,7 +47,7 @@ func (o *Option) UnmarshalYAML(n *yaml.Node) error {
 // Input is one form field.
 type Input struct {
 	Name        string   `yaml:"name" json:"name"`
-	Type        string   `yaml:"type" json:"type"` // file text textarea number select checkbox url hidden
+	Type        string   `yaml:"type" json:"type"` // file text textarea number select checkbox url hidden json
 	Label       string   `yaml:"label" json:"label"`
 	Help        string   `yaml:"help" json:"help,omitempty"`
 	Placeholder string   `yaml:"placeholder" json:"placeholder,omitempty"`
@@ -67,6 +67,7 @@ type Input struct {
 var validTypes = map[string]bool{
 	"file": true, "text": true, "textarea": true, "number": true,
 	"select": true, "checkbox": true, "url": true, "hidden": true,
+	"json": true, // any JSON value; not rendered by the generic form
 }
 
 // Manifest is the parsed plugin.yaml.

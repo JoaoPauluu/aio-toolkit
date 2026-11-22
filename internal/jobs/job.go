@@ -57,6 +57,7 @@ type Job struct {
 	subs   map[chan Event]struct{}
 	cancel context.CancelFunc
 	dir    string
+	done   chan struct{} // closed when the job reaches a finished state; nil for jobs restored from disk
 }
 
 func (j *Job) Snapshot(withLogs bool) Snapshot {
@@ -78,6 +79,13 @@ func (j *Job) snapshotLocked(withLogs bool) Snapshot {
 func (j *Job) update(f func(s *Snapshot)) {
 	j.mu.Lock()
 	f(&j.snap)
+	if j.done != nil && j.snap.State.Finished() {
+		select {
+		case <-j.done:
+		default:
+			close(j.done)
+		}
+	}
 	ev := Event{Type: "update", Data: j.snapshotLocked(false)}
 	j.broadcastLocked(ev)
 	j.mu.Unlock()
@@ -122,6 +130,22 @@ func (j *Job) Subscribe() (Snapshot, <-chan Event, func()) {
 }
 
 func (j *Job) Dir() string { return j.dir }
+
+// Wait blocks until the job finishes or ctx is done, and returns the latest
+// snapshot (without logs). Check State.Finished() to tell the two apart.
+func (j *Job) Wait(ctx context.Context) Snapshot {
+	j.mu.Lock()
+	s, done := j.snapshotLocked(false), j.done
+	j.mu.Unlock()
+	if s.State.Finished() || done == nil {
+		return s
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	return j.Snapshot(false)
+}
 
 // Cancel stops a queued or running job.
 func (j *Job) Cancel() {
