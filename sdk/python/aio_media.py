@@ -92,3 +92,28 @@ def parse_time(t: str | None) -> float | None:
 
 AUDIO_EXT_FOR_CODEC = {"aac": "m4a", "alac": "m4a", "mp3": "mp3", "opus": "opus", "vorbis": "ogg",
                        "flac": "flac", "pcm_s16le": "wav", "pcm_s24le": "wav", "ac3": "ac3", "eac3": "eac3"}
+
+
+def ensure_h264(path, force=False, lo=0, hi=100) -> str:
+    """Re-encode to H.264 + AAC (yuv420p) unless it already is; keeps cover art and metadata."""
+    info = probe(path)
+    if not info.video:
+        return "no video"
+    v_ok = info.vcodec == "h264" and info.video.get("pix_fmt") in ("yuv420p", "yuvj420p")
+    a_ok = info.acodec in (None, "aac", "mp3")
+    if v_ok and a_ok and not force:
+        return f"already H.264/{info.acodec or 'no audio'}, kept as is"
+    covers = [s for s in info.streams if s.get("codec_type") == "video" and s.get("disposition", {}).get("attached_pic")]
+    path = Path(path)
+    tmp = path.with_name(path.stem + ".reencode.mp4")
+    args = ["-i", path, "-map", f"0:{info.video['index']}", "-map", "0:a?"]
+    if covers:
+        args += ["-map", f"0:{covers[0]['index']}", "-c:v:1", "copy", "-disposition:v:1", "attached_pic"]
+    reencode_v = force or not v_ok
+    args += ["-c:v:0", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p"] if reencode_v else ["-c:v:0", "copy"]
+    args += ["-c:a", "aac", "-b:a", "192k"] if (force or not a_ok) else ["-c:a", "copy"]
+    args += ["-map_metadata", "0", "-map_chapters", "0", "-movflags", "+faststart", tmp]
+    before = f"{info.vcodec}/{info.acodec}"
+    ffmpeg(args, info.duration, lo, hi)
+    tmp.replace(path)
+    return f"re-encoded {before} → h264/aac"

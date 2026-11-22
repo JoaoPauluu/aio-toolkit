@@ -4,6 +4,7 @@ import re
 import subprocess
 
 import aio
+from aio_media import ensure_h264
 
 p = aio.params()
 urls = [u.strip() for u in re.split(r"[\s,]+", p.get("urls", "")) if u.strip()]
@@ -38,21 +39,22 @@ if js:
 
 cmd += ["--yes-playlist"] if p.get("playlist") else ["--no-playlist"]
 
-h = "" if q == "best" else f"[height<={q}]"
+# Quality: no hard height filter. "-S res:N" makes yt-dlp take the largest
+# resolution <= N, or the smallest one above N if nothing is that small,
+# i.e. the nearest available quality.
+res = "" if q == "best" else f"res:{q},"
+compat = p.get("compat", "auto")
 if fmt == "mp4":
-    cmd += ["-f", f"bv*{h}+ba/b{h}/bv*+ba/b",
-            "-S", ("res:" + q + "," if q != "best" else "") + "vcodec:h264,acodec:aac,ext:mp4:m4a",
-            "--merge-output-format", "mp4"]
-    if p.get("recode"):
-        cmd += ["--recode-video", "mp4", "--postprocessor-args", "VideoConvertor:-c:v libx264 -preset veryfast -crf 22 -c:a aac -b:a 192k"]
-    else:
-        cmd += ["--remux-video", "mp4"]
+    # Prefer H.264/AAC at the chosen resolution so most downloads need no re-encode.
+    # With "never" we keep whatever codec is best (VP9/AV1/Opus may end up in the MP4).
+    codecs = "vcodec:h264,acodec:aac,ext:mp4:m4a" if compat != "never" else "ext:mp4:m4a"
+    cmd += ["-f", "bv*+ba/b", "-S", res + codecs, "--merge-output-format", "mp4", "--remux-video", "mp4"]
 elif fmt == "mp3":
     cmd += ["-f", "ba/b", "-x", "--audio-format", "mp3", "--audio-quality", p.get("bitrate", "0")]
 elif fmt == "m4a":
     cmd += ["-f", "ba[ext=m4a]/ba/b", "-x", "--audio-format", "m4a"]
 else:
-    cmd += ["-f", f"bv*{h}+ba/b{h}/bv*+ba/b"]
+    cmd += ["-f", "bv*+ba/b"] + (["-S", res.rstrip(",")] if res else [])
 
 if p.get("metadata"):
     cmd += ["--embed-metadata", "--embed-thumbnail", "--embed-chapters"]
@@ -112,6 +114,13 @@ if proc.returncode != 0 and not files:
     aio.fail(last_err or f"yt-dlp exited with code {proc.returncode}")
 if proc.returncode != 0:
     aio.log(f"Some items failed: {last_err}")
+
+
+if fmt == "mp4" and compat != "never":
+    targets = [f for f in files if f.suffix.lower() == ".mp4"]
+    for i, f in enumerate(targets):
+        aio.status(f"Checking compatibility {i + 1}/{len(targets)}: {f.name}")
+        aio.log(f"{f.name}: {ensure_h264(f, force=compat == 'always')}")
 
 if p.get("library"):
     aio.status(f"Saved {len(files)} file(s) to the library ({dest})")

@@ -22,21 +22,31 @@ inputs:
       - {value: m4a, label: "Audio · M4A (no re-encode when possible)"}
       - {value: best, label: "Best original (no conversion)"}
   - name: quality
-    label: Max video resolution
+    label: Video quality
     type: select
     default: "1080"
+    help: If the video isn't available in this quality, the nearest available one is used (the closest lower one, or the closest higher one if nothing lower exists).
     options:
       - {value: best, label: Best available}
+      - {value: "4320", label: 4320p (8K)}
       - {value: "2160", label: 2160p (4K)}
-      - {value: "1440", label: 1440p}
-      - {value: "1080", label: 1080p}
-      - {value: "720", label: 720p}
+      - {value: "1440", label: 1440p (2K)}
+      - {value: "1080", label: 1080p (Full HD)}
+      - {value: "720", label: 720p (HD)}
       - {value: "480", label: 480p}
+      - {value: "360", label: 360p}
+      - {value: "240", label: 240p}
+      - {value: "144", label: 144p}
     show_if: {format: [mp4, best]}
-  - name: recode
-    label: Force re-encode to H.264/AAC (slow, maximum compatibility)
-    type: checkbox
-    default: false
+  - name: compat
+    label: Compatibility
+    type: select
+    default: auto
+    help: Above 1080p YouTube only offers VP9/AV1, which many players (TVs, phones, Windows, editors) can't play inside an MP4.
+    options:
+      - {value: auto, label: "Auto: re-encode to H.264/AAC only when needed (recommended)"}
+      - {value: always, label: "Always re-encode to H.264/AAC (slowest)"}
+      - {value: never, label: "Never: keep original codecs (VP9/AV1/Opus possible)"}
     show_if: {format: [mp4]}
   - name: bitrate
     label: MP3 quality
