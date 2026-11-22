@@ -107,6 +107,18 @@ The rest of the app has no login. Your reverse proxy should therefore **let only
 
 Set `AIO_PUBLIC_URL=https://tools.example.com` so the links the UI hands out use your public domain, even when you created the share over your LAN or VPN address.
 
+## Calling tools from other containers
+
+Every tool is also an HTTP endpoint, with the same options as its form (for example the downloader's format and quality). Authelia protects the reverse proxy, not the container, so other services on the same docker network can call `http://aio-toolkit:8080/api/...` directly, without going through the proxy. There is no extra port or process: the same server handles both.
+
+```sh
+curl -F files=@a.pdf -F files=@b.pdf 'http://aio-toolkit:8080/api/plugins/pdf-merge/run?wait=5m&output=file' -o merged.pdf
+```
+
+`GET /api/plugins/<id>` describes a tool's fields, `?wait=` returns the finished job in one request, and `&output=file` returns the file itself. JSON bodies work for tools without file inputs. See [HTTP API](docs/PLUGINS.md#http-api).
+
+The API has no authentication, so anything that can reach port 8080 can use it. Keep the container on an internal docker network shared only with the proxy and the services that need it, and remove `ports:` if nothing outside docker needs direct access.
+
 ## Architecture
 
 ```

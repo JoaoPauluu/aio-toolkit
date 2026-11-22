@@ -26,7 +26,7 @@ submit_label: Go            # optional button text
 ui: ui/index.html           # optional: custom UI instead of the generated form
 inputs:
   - name: files
-    type: file              # file | text | textarea | number | select | checkbox | url | hidden
+    type: file              # file | text | textarea | number | select | checkbox | url | hidden | json
     label: Input files
     accept: .pdf
     multiple: true
@@ -47,7 +47,12 @@ inputs:
     type: checkbox
     default: false
     help: Small helper text under the field.
+  - name: pages
+    type: json                       # any JSON value; not shown in the generated form,
+                                     # set by a custom UI or an API caller
 ```
+
+**Declare every parameter your script reads.** The manifest is the plugin's API: anything not declared can only be set by a custom UI, and `go test ./...` fails if a built-in `run.py` reads an undeclared key.
 
 ## Runtime contract
 
@@ -127,7 +132,7 @@ Set `ui: ui/index.html`. If a plugin has a `ui` but no `run`, it is UI-only and 
   const job = await AIO.submit({
     files:  { files: [fileA, fileB] },   // field -> File[]  (order preserved)
     fields: { output_name: "x.pdf" },    // typed by the manifest's inputs
-    params: { pages: [...] },            // any JSON, merged into params.json
+    params: { extra: [...] },            // any JSON, merged into params.json (prefer declared `json` inputs)
     title:  "shown in the Jobs panel",
   });
   // The main Jobs panel tracks progress and downloads automatically.
@@ -152,21 +157,51 @@ The image contains Python 3, ffmpeg, qpdf, Ghostscript, Node.js and yt-dlp. If a
 
 ## HTTP API
 
-The UI is built only on these endpoints, so you can script them too:
+The UI is built only on these endpoints, so anything the UI does can be scripted, e.g. from another container on the same docker network (`http://aio-toolkit:8080`):
 
 ```
 GET    /api/plugins                    list plugins + load errors
+GET    /api/plugins/{id}               one plugin's schema: inputs, types, defaults, options, min/max, show_if
 POST   /api/plugins/reload
-POST   /api/plugins/{id}/run           multipart form → job JSON
+POST   /api/plugins/{id}/run           multipart, urlencoded or JSON → job JSON
 GET    /api/jobs                       recent jobs
-GET    /api/jobs/{id}                  job + logs
+GET    /api/jobs/{id}                  job + logs (?wait=… to block until it finishes)
 GET    /api/jobs/{id}/events           Server-Sent Events: snapshot / update / log
 GET    /api/jobs/{id}/files/{name}     download an output (?inline=1 to view)
 GET    /api/jobs/{id}/zip              all outputs as a zip
 POST   /api/jobs/{id}/cancel
 DELETE /api/jobs/{id}
+POST   /api/shares                     multipart: files, expires (1h|1d|7d|30d|never), password, note
+GET    /api/shares
+DELETE /api/shares/{id}
 ```
 
+### Parameters
+
+Field names are the manifest's input names; `GET /api/plugins/{id}` lists them with their allowed values. Fields work exactly as in the form: missing fields take their default, checkboxes accept `true/false/1/on/yes`, and a field whose `show_if` isn't met is ignored (its default is used), so the same choices give the same `params.json` whether they come from the UI or the API.
+
+- **multipart/form-data**: needed for file inputs (repeat the field for several files). A `json` input is sent as JSON text.
+- **application/json**: an object of field → value (numbers, booleans, strings, arrays for multi-value fields). A `json` input takes the value directly. Files can't be sent this way.
+- `__title` sets the job title shown in the Jobs panel.
+
+### Waiting for the result
+
+By default `run` returns `201` immediately with the queued job. Add query options to get the result in one request:
+
+- `?wait=5m` (Go duration or seconds, capped at the plugin timeout): wait for the job. `200` + job JSON (with logs, and a `url` for each output file) when it finished, or `202` + job JSON if it is still running when the wait ends — then poll `GET /api/jobs/{id}?wait=5m`. Disconnecting doesn't cancel the job.
+- `&output=file`: reply with the output itself — the single output file, the one named by `&file=<name>`, or a zip when there are several. A failed or canceled job returns `422` + job JSON with the last log lines; a job with no outputs (e.g. saved to the server library) returns the job JSON.
+
 ```sh
-curl -F files=@a.pdf -F files=@b.pdf http://host:8080/api/plugins/pdf-merge/run
+# Download a video at 720p into the server library, waiting up to 30 minutes
+curl -H 'Content-Type: application/json' \
+     -d '{"urls":"https://youtu.be/…","format":"mp4","quality":"720","compat":"auto","library":true}' \
+     'http://aio-toolkit:8080/api/plugins/ytdlp/run?wait=30m'
+
+# Merge two PDFs with a custom page order and get the PDF back
+curl -F files=@a.pdf -F files=@b.pdf -F 'pages=[{"file":1,"page":1},{"file":0,"page":2,"rotate":90}]' \
+     'http://aio-toolkit:8080/api/plugins/pdf-merge/run?wait=5m&output=file' -o merged.pdf
+
+# QR code as PNG
+curl -H 'Content-Type: application/json' -d '{"text":"https://example.com"}' \
+     'http://aio-toolkit:8080/api/plugins/qr-code/run?wait=1m&output=file' -o qr.png
 ```

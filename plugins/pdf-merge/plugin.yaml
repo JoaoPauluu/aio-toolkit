@@ -15,3 +15,7 @@ inputs:
   - name: output_name
     type: text
     default: merged.pdf
+  - name: pages
+    type: json
+    label: Page order
+    help: "Optional custom page order: [{file, page, rotate}], file = 0-based index into files, page = 1-based, rotate = 0/90/180/270. Omit to merge whole files in order." 
