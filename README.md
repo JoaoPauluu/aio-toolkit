@@ -27,6 +27,20 @@ AIO Toolkit is a self-hosted toolbox with a web UI, designed to use very little 
 - **QR Code Generator**: links, text or Wi-Fi networks, as PNG or SVG. Its Python library is installed the first time it runs.
 - **Share files**: share files by private link at `https://your-host/files/<random-id>`, with an expiry and an optional password, plus a list of active shares. See [Sharing](#sharing-files-by-link).
 
+## Community plugins
+
+Open **🧩 Community plugins** (bottom of the sidebar) and paste a link:
+
+- `https://github.com/owner/repo`, `owner/repo@v1.2.0`, or `https://github.com/owner/repo/tree/main/some/folder`
+- GitLab (`https://gitlab.com/group/repo`), Codeberg / Gitea / Forgejo (`https://codeberg.org/owner/repo`)
+- any direct `.zip` / `.tar.gz` link
+
+The toolkit downloads the plugin over HTTPS (no `git` needed), shows what it will run, and installs it into `/plugins/community/` after you confirm. Without a ref it installs the latest release, or the default branch when there are no releases. Every 6 hours it checks for new commits or releases and updates automatically. You can turn auto-update off per plugin and update by hand instead, roll back to the previous version, disable a plugin or remove it. State lives in `/plugins/community/.state.json`, so **mount `/plugins`** (both compose examples do) to keep community plugins across restarts and image updates.
+
+Community plugins run their own code inside the container. Only install plugins you trust. Set `AIO_COMMUNITY=off` to disable the feature.
+
+To publish one, put a plugin folder (see [Writing plugins](docs/PLUGINS.md)) in a public repository, at the root or one folder per plugin. [`examples/latex-tectonic`](examples/latex-tectonic) is a complete example that downloads its own toolchain (Tectonic) to compile LaTeX. See [Publishing a plugin](docs/PLUGINS.md#publishing-a-community-plugin).
+
 ## Run it
 
 ```sh
@@ -123,8 +137,10 @@ The API has no authentication, so anything that can reach port 8080 can use it. 
 
 ```
 Browser ──HTTP / SSE──► aio (Go, ~10-20 MB RSS idle)
-                         ├─ plugin registry: scans /app/plugins + /plugins, hot reload
+                         ├─ plugin registry: scans /app/plugins, /plugins/community, /plugins; hot reload
+                         ├─ community manager: install from GitHub/GitLab/Gitea/archives, update checks, rollback
                          ├─ job runner: queue (AIO_MAX_JOBS), subprocess per job, cancel, timeout
+                         ├─ services, schedules and event hooks declared by plugins
                          └─ job store: /data/jobs/<id>/{in,out}, deleted after AIO_JOB_TTL
                                  │
                        python3 run.py / sh run.sh  →  qpdf · gs · ffmpeg · yt-dlp
@@ -146,6 +162,12 @@ Browser ──HTTP / SSE──► aio (Go, ~10-20 MB RSS idle)
 | `AIO_YTDLP_JS_RUNTIME` | `node` | JS runtime passed to yt-dlp (`--js-runtimes`); empty disables it |
 | `AIO_PUBLIC_URL` | *(browser origin)* | base URL used in share links, e.g. `https://tools.example.com` |
 | `AIO_SHARE_MAX_MB` | `2048` | maximum upload size per share |
+| `AIO_COMMUNITY` | `on` | `off` disables installing community plugins |
+| `AIO_COMMUNITY_DIR` | `/plugins/community` | where community plugins are installed (keep it on a persistent volume) |
+| `AIO_COMMUNITY_CHECK` | `6h` | how often to check community plugins for updates (`0` = never) |
+| `AIO_COMMUNITY_MAX_MB` | `200` | maximum download / unpacked size of one community plugin |
+| `AIO_GITHUB_TOKEN`, `AIO_GITLAB_TOKEN`, `AIO_GITEA_TOKEN` | | optional API tokens for private repositories and higher rate limits |
+| `AIO_INTERNAL_URL` | `http://127.0.0.1:<port>` | how plugins reach the server (`AIO_API`) |
 
 ## Writing plugins
 

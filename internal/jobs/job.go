@@ -29,6 +29,8 @@ type Snapshot struct {
 	ID         string    `json:"id"`
 	Plugin     string    `json:"plugin"`
 	PluginName string    `json:"plugin_name"`
+	Kind       string    `json:"kind,omitempty"`   // "" (normal run), setup, schedule, event
+	Parent     string    `json:"parent,omitempty"` // job that called this one through the API
 	Title      string    `json:"title,omitempty"`
 	State      State     `json:"state"`
 	Progress   float64   `json:"progress"` // 0-100, or -1 when unknown
@@ -58,6 +60,12 @@ type Job struct {
 	cancel context.CancelFunc
 	dir    string
 	done   chan struct{} // closed when the job reaches a finished state; nil for jobs restored from disk
+
+	token  string          // secret given to the process as AIO_JOB_TOKEN
+	ctx    context.Context // set while queued/running; children derive from it
+	depth  int             // nesting depth (0 = top-level)
+	origin string          // plugin whose event hook started this job (loop guard)
+	hops   int             // event-hook chain length that led to this job
 }
 
 func (j *Job) Snapshot(withLogs bool) Snapshot {

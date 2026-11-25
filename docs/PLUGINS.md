@@ -52,6 +52,35 @@ inputs:
                                      # set by a custom UI or an API caller
 ```
 
+Optional keys for richer plugins (all explained below):
+
+```yaml
+version: 1.2.0                # shown in the UI; bump it when you publish
+author: your-name
+homepage: https://github.com/you/aio-my-tool
+license: MIT
+aio_api: 1                    # plugin API version you need; newer than the host's → refused
+provides: [pdf.ocr]           # capabilities other plugins can look up
+requires:                     # checked / installed together with this plugin
+  - id: pdf-merge             # must exist (built-in or installed)
+  - source: github.com/you/aio-ocr-models   # community plugin, installed automatically
+setup: [python3, setup.py]    # runs once after every install/update (download tools, pip install…)
+service:                      # long-running process, reachable at /s/<id>/
+  run: [python3, server.py]
+  health: /health             # optional HTTP path polled until it answers
+  restart: always             # always (default) | on-failure | never
+schedule:                     # start jobs automatically
+  - every: 6h                 # Go duration, at least 1m
+    params: {mode: full}      # input values (defaults for the rest)
+  - cron: "0 3 * * 1-5"       # minute hour day month weekday, or @hourly/@daily/@weekly/@monthly
+events:                       # start a job when an event fires
+  - on: job.done              # exact topic, or a prefix like job.* ; * = everything
+    filter: {plugin: ytdlp}   # event data fields that must match (a list = any of)
+    params: {}
+```
+
+`run` is required unless the plugin has a `ui` or a `service`. Plugins with `schedule` or `events` need `run`.
+
 **Declare every parameter your script reads.** The manifest is the plugin's API: anything not declared can only be set by a custom UI, and `go test ./...` fails if a built-in `run.py` reads an undeclared key.
 
 ## Runtime contract
@@ -67,6 +96,13 @@ Your script gets these environment variables:
 | `AIO_DATA` | The persistent data volume (`/data`). |
 | `AIO_DOWNLOADS` | The persistent "library" folder (`/downloads`). |
 | `AIO_PLUGIN_DIR` | Your plugin folder. |
+| `AIO_PLUGIN_ID` | Your plugin id. |
+| `AIO_PLUGIN_DATA` | Persistent folder for your plugin (`/data/plugins/<id>`). It survives updates; its `bin/` is on `PATH`. |
+| `AIO_TOOLS` | Shared tool folder (`/data/tools/bin`), on every plugin's `PATH`. |
+| `AIO_API` | Base URL of the toolkit's HTTP API, for calling other plugins. |
+| `AIO_JOB_TOKEN` | Secret identifying this job. Send it as `X-AIO-Job-Token` when calling the API (the SDKs do). |
+| `AIO_ARCH` | CPU architecture: `amd64` or `arm64`. |
+| `AIO_EVENT` | Only for jobs started by an event hook: path to the event JSON (also in `params["event"]`). |
 
 Lines your script prints to stdout or stderr appear in the job log. Lines in these special forms update the UI instead:
 
@@ -90,6 +126,8 @@ aio.status("Working…"); aio.progress(30)
 aio.run(["ffmpeg", "-i", p["files"][0], aio.out("result.mp4")])  # streams output to the log, fails the job on error
 aio.fail("something went wrong")                                # ::error + exit 1
 aio.original_name(path)    # "001_foo.pdf" -> "foo.pdf"
+aio.title("name.pdf")      # job title in the Jobs panel
+aio.plugin_data()          # Path of $AIO_PLUGIN_DATA (persistent)
 ```
 
 ### Bash example
@@ -142,12 +180,95 @@ Set `ui: ui/index.html`. If a plugin has a `ui` but no `run`, it is UI-only and 
 
 `/vendor/` serves the bundled libraries: `pdf.min.mjs`, `pdf.worker.min.mjs` (pdf.js) and `Sortable.min.js`. See `plugins/pdf-merge/ui/index.html` for a full example.
 
-## Needing extra tools
+## Talking to other plugins
 
-The image contains Python 3, ffmpeg, qpdf, Ghostscript, Node.js and yt-dlp. If a plugin needs something else, either:
+Plugins call each other through the same HTTP API the UI uses, so any plugin can use any other one, built-in or community.
 
-- install Python packages into a venv under `$AIO_DATA` from the plugin itself (see `plugins/ytdlp-update/run.sh`), or
-- extend the image:
+```python
+import aio
+res = aio.call("pdf-merge", files={"files": [a, b]})       # waits; raises RuntimeError if it fails
+merged = res.files[0]                                       # outputs downloaded to the job folder
+res = aio.call("ytdlp", {"urls": url, "format": "mp3"})     # params = the target's inputs
+
+ocr = aio.find("pdf.ocr")          # plugins that declare provides: [pdf.ocr]
+if ocr:
+    aio.call(ocr[0]["id"], files={"files": [merged]})
+
+aio.emit("my-tool.finished", {"count": 3})   # custom event; others can hook it
+aio.event()                                  # the event that started this job (event hooks)
+aio.api("GET", "/api/jobs")                  # anything else in the API
+```
+
+A job's calls carry its `AIO_JOB_TOKEN`. The called job then **skips the queue** (the caller already holds a slot, so `AIO_MAX_JOBS` can't deadlock), is canceled together with the caller, and shows its parent in `GET /api/jobs/<id>`. Calls can nest up to 4 levels.
+
+From a custom UI:
+
+```js
+const job = await AIO.call("pdf-merge", { files: { files: [a, b] } });   // resolves when done
+const found = await AIO.find("pdf.ocr");
+const stop = AIO.on("job.done", (ev) => console.log(ev.data.plugin, ev.data.files));
+await AIO.emit("my-tool.saved", { id: 1 });
+fetch(AIO.serviceUrl() + "items");                                       // your background service
+```
+
+Any language works: send `X-AIO-Job-Token: $AIO_JOB_TOKEN` to `$AIO_API`.
+
+## Events
+
+The server publishes these events. Each one has `topic`, `time`, `data`, and `source` (the plugin whose event hook caused it, if any):
+
+| Topic | `data` |
+|---|---|
+| `job.queued`, `job.started`, `job.done`, `job.failed`, `job.canceled` | `job`, `plugin`, `title`, `state`, `kind`, `files` (name, size, url), `error`, `parent` |
+| `plugin.installed`, `plugin.updated`, `plugin.removed`, `plugin.enabled`, `plugin.disabled` | `source`, `url`, `ref`, `commit`, `plugins` |
+| `service.started`, `service.stopped` | `plugin`, `state`, `port`, `error` |
+| `share.created`, `share.deleted` | `share`, `files`, `size` |
+| `<namespace>.<name>` | whatever a plugin publishes with `aio.emit` / `POST /api/events` |
+
+Custom topics can't use the built-in prefixes. Use your plugin id as the namespace.
+
+An `events:` hook starts a job of your plugin with the event in `params["event"]` and in the file `$AIO_EVENT`. To prevent loops, a plugin never receives events caused by its own hook jobs, and a chain of hook-started jobs stops after 3 hops.
+
+`GET /api/events?topic=job.done,my-tool.*` streams events as Server-Sent Events.
+
+## Schedules
+
+`schedule:` entries start a normal job (it shows in the Jobs panel) every interval or at cron times in the container's time zone (set `TZ` to change it). `params` fill inputs; everything else takes its default.
+
+## Background services
+
+A `service:` is a process that runs as long as the plugin is enabled, such as a small web app, a watcher or a bot. The server:
+
+- starts it with the plugin folder as cwd and the same environment as jobs, plus `AIO_SERVICE_PORT` (and `PORT`) — **listen on 127.0.0.1 at that port** — and `AIO_SERVICE_BASE=/s/<id>/`;
+- proxies `/s/<id>/<path>` to `http://127.0.0.1:<port>/<path>` (streaming and SSE work; the original prefix is sent as `X-Forwarded-Prefix`);
+- restarts it when it exits (with backoff, per `restart`) and after the plugin is updated, and stops it when the plugin is disabled or removed;
+- keeps the last 500 lines of output: `GET /api/services/<id>/logs`, also shown in the Community plugins tab.
+
+A plugin can have a service and a `ui` together: the UI talks to `AIO.serviceUrl()`. Services cost memory while they run, so prefer jobs when you can.
+
+## Bringing your own tools
+
+The image contains Python 3, ffmpeg, qpdf, Ghostscript, Node.js, libvips and yt-dlp. The container runs as a normal user on **Alpine Linux (musl)**, so `apk add` isn't available at runtime. Instead:
+
+- **Prebuilt binaries:** `aio.ensure_binary()` downloads a binary (or extracts it from a `.tar.gz`/`.zip`) for the current architecture into your plugin's `bin/`, once per `version`. Use static or `*-linux-musl` builds:
+
+  ```python
+  exe = aio.ensure_binary("tectonic", {
+      "amd64": "https://…/tectonic-0.17.0-x86_64-unknown-linux-musl.tar.gz",
+      "arm64": "https://…/tectonic-0.17.0-aarch64-unknown-linux-musl.tar.gz",
+  }, version="0.17.0", sha256={"amd64": "…"})   # sha256 optional
+  ```
+
+  `shared=True` puts it in `$AIO_TOOLS`, on every plugin's `PATH`, so one plugin can provide a tool for others.
+- **Python packages:** `aio.ensure_packages()` (above).
+- **Node packages:** `npm install --prefix "$AIO_PLUGIN_DATA" <pkg>`.
+- **Compile from source:** pure-Go or Rust toolchains can be downloaded the same way into `$AIO_PLUGIN_DATA` and run from `setup`.
+
+Do this work in `setup:` so it happens at install time, and its progress shows in the Jobs panel. A failed setup aborts the install or update and keeps the old version. Setup runs in a staging folder that is moved into place afterwards, so write anything that must persist to `$AIO_PLUGIN_DATA` rather than baking absolute plugin paths into files. Caches under `$XDG_CACHE_HOME` (`/data/cache`) persist too.
+
+[`examples/latex-tectonic`](../examples/latex-tectonic) compiles LaTeX with Tectonic this way.
+
+For something only a system package provides, extend the image:
 
   ```dockerfile
   FROM aio-toolkit:latest
@@ -171,9 +292,26 @@ GET    /api/jobs/{id}/files/{name}     download an output (?inline=1 to view)
 GET    /api/jobs/{id}/zip              all outputs as a zip
 POST   /api/jobs/{id}/cancel
 DELETE /api/jobs/{id}
+GET    /api/plugins?provides=cap       plugins that declare a capability
 POST   /api/shares                     multipart: files, expires (1h|1d|7d|30d|never), password, note
 GET    /api/shares
 DELETE /api/shares/{id}
+GET    /api/events                     Server-Sent Events (?topic=job.done,plugin.*)
+POST   /api/events                     {"topic": "my-tool.thing", "data": {…}}
+GET    /api/services                   background services and their state
+GET    /api/services/{id}/logs
+POST   /api/services/{id}/restart
+*      /s/{id}/{path}                  proxied to the plugin's service
+GET    /api/community                  installed community sources
+POST   /api/community/preview          {"url": "…"} → download + validate, returns a token and what would be installed
+POST   /api/community/install          {"token": "…", "auto_update": true, "wait": false}
+DELETE /api/community/preview/{token}
+PATCH  /api/community/{id}             {"enabled": bool, "auto_update": bool, "ref": "v2"}
+POST   /api/community/{id}/check       look for updates (applies them if auto-update is on); ?wait=1 to block
+POST   /api/community/{id}/update      update now
+POST   /api/community/{id}/rollback    back to the previous version (turns auto-update off)
+DELETE /api/community/{id}
+POST   /api/community/check            check every source
 ```
 
 ### Parameters
@@ -205,3 +343,14 @@ curl -F files=@a.pdf -F files=@b.pdf -F 'pages=[{"file":1,"page":1},{"file":0,"p
 curl -H 'Content-Type: application/json' -d '{"text":"https://example.com"}' \
      'http://aio-toolkit:8080/api/plugins/qr-code/run?wait=1m&output=file' -o qr.png
 ```
+
+## Publishing a community plugin
+
+1. Put your plugin in a public Git repository: `plugin.yaml` at the repository root, or one folder per plugin (at the root or under `plugins/`) to publish a pack. Copying [`examples/latex-tectonic`](../examples/latex-tectonic) is a quick start.
+2. Set `version`, `author`, `homepage` and `aio_api: 1`. If there's no `id`, the folder (or repository) name is used.
+3. Tag releases (`v1.0.0`). Users who paste the plain repository URL get the **latest release** and are updated when you publish a new one. Without releases they follow the default branch, so every push becomes an update.
+4. Share the link: `https://github.com/you/aio-my-tool`, or `…/tree/main/plugins/my-tool` for one folder of a bigger repository. GitLab, Codeberg/Gitea/Forgejo and plain `.zip`/`.tar.gz` links work too.
+
+Users can pin a version with `owner/repo@v1.0.0` (or by changing the ref via the API). The toolkit refuses archives with absolute paths, `..`, links pointing outside the plugin or special files, and anything larger than `AIO_COMMUNITY_MAX_MB`.
+
+For a quick test, run `make run` and copy the folder into `./plugins/` (it is picked up within 5 seconds), or install it from a `.zip` link.
