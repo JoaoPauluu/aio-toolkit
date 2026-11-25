@@ -160,3 +160,6 @@ pre.logs { background: var(--panel-2); border-radius: 6px; padding: 8px; font: 1
 .empty { text-align: center; padding: 20px 0; }
 
 iframe.plugin-ui { width: 100%; border: 0; min-height: 70vh; display: block; background: transparent; }
+
+.pill { background: var(--accent); color: var(--accent-text); border-radius: 9px; font-size: 10px; padding: 0 6px; font-weight: 600; }
+#community-link:hover { text-decoration: none; }

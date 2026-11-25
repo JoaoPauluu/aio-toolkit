@@ -1,0 +1,37 @@
+# Example community plugin: compiles LaTeX to PDF with Tectonic.
+# Install it from the Community plugins tab with
+#   https://github.com/JoaoPauluu/aio-toolkit/tree/main/examples/latex-tectonic
+id: latex-tectonic
+name: LaTeX → PDF
+category: Documents
+icon: "📐"
+description: Compile a .tex file, a zipped LaTeX project or pasted LaTeX into a PDF with Tectonic.
+version: 1.0.0
+author: AIO Toolkit
+homepage: https://github.com/JoaoPauluu/aio-toolkit/tree/main/examples/latex-tectonic
+license: MIT
+aio_api: 1
+provides: [latex.compile]
+setup: [python3, setup.py]      # downloads the Tectonic binary once, right after install/update
+run: [python3, run.py]
+timeout: 20m
+submit_label: Compile
+inputs:
+  - name: files
+    type: file
+    label: .tex file or zipped project
+    accept: .tex,.zip
+    help: For a .zip, the main file is found automatically (or set it below).
+  - name: source
+    type: textarea
+    label: …or paste LaTeX
+    placeholder: "\\documentclass{article}\n\\begin{document}\nHello!\n\\end{document}"
+  - name: main
+    type: text
+    label: Main file in the zip
+    placeholder: main.tex
+    help: Leave empty to pick the file containing \documentclass.
+  - name: keep_logs
+    type: checkbox
+    label: Also return the .log file
+    default: false

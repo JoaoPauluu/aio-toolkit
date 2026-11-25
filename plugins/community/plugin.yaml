@@ -1,0 +1,6 @@
+id: community
+name: Community plugins
+category: System
+icon: "🧩"
+description: Install plugins from GitHub, GitLab, Codeberg or an archive link, and keep them updated.
+ui: ui/index.html

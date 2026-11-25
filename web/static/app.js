@@ -82,7 +82,11 @@
     view.replaceChildren(
       el("div", { class: "tool-head" },
         el("div", { class: "ic" }, p.icon || "🔧"),
-        el("div", {}, el("h1", {}, p.name), el("div", { class: "muted" }, p.description || ""))),
+        el("div", {}, el("h1", {}, p.name), el("div", { class: "muted" }, p.description || ""),
+          p.community ? el("div", { class: "muted small" }, "🧩 Community plugin",
+            p.version ? ` · v${p.version}` : "", p.author ? ` · by ${p.author}` : "", " · ",
+            el("a", { href: "#/t/community" }, "manage"),
+            p.homepage ? el("span", {}, " · ", el("a", { href: p.homepage, target: "_blank", rel: "noopener" }, "homepage")) : "") : null)),
       p.ui_url ? renderCustomUI(p) : renderForm(p),
     );
   }
@@ -381,7 +385,19 @@
       else setJob({ id, plugin, plugin_name: state.plugins.find((p) => p.id === plugin)?.name, state: "uploading", progress, status, files: [], created: new Date().toISOString() });
     }
     if (e.data.type === "aio:height") frame.style.height = Math.max(300, e.data.height + 4) + "px";
+    if (e.data.type === "aio:plugins-changed") { loadPlugins().catch(() => {}); loadCommunityBadge(); }
   });
+
+  // ---------------------------------------------------------------- community badge
+  async function loadCommunityBadge() {
+    try {
+      const d = await api("/api/community");
+      const b = $("#community-badge");
+      b.hidden = !d.updates;
+      b.textContent = d.updates || "";
+      $("#community-link").hidden = !d.enabled && !state.plugins.some((p) => p.id === "community");
+    } catch {}
+  }
 
   // ---------------------------------------------------------------- wiring
   $("#search").addEventListener("input", renderNav);
@@ -400,6 +416,8 @@
   window.addEventListener("hashchange", route);
   window.addEventListener("focus", () => loadPlugins().catch(() => {}));
   setInterval(() => { if (!document.hidden) loadPlugins().catch(() => {}); }, 15000);
+  setInterval(() => { if (!document.hidden) loadCommunityBadge(); }, 60000);
+  loadCommunityBadge();
 
   loadPlugins().catch((e) => { $("#view").textContent = "Failed to load plugins: " + e.message; });
   loadJobs().catch(() => {});

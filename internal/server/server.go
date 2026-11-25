@@ -20,9 +20,12 @@ import (
 	"strings"
 	"time"
 
+	"aio/internal/community"
+	"aio/internal/events"
 	"aio/internal/fsutil"
 	"aio/internal/jobs"
 	"aio/internal/plugin"
+	"aio/internal/services"
 	"aio/internal/shares"
 )
 
@@ -36,6 +39,11 @@ type Server struct {
 	Shares         *shares.Manager
 	ShareMaxUpload int64  // bytes
 	PublicURL      string // external base URL used to build share links (may be empty)
+
+	Community         *community.Manager // nil when AIO_COMMUNITY=off
+	CommunityInterval time.Duration
+	Services          *services.Supervisor
+	Events            *events.Bus
 }
 
 func (s *Server) Handler() http.Handler {
@@ -71,6 +79,7 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, 200, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("GET /p/{id}/{path...}", s.pluginAsset)
+	s.extensionRoutes(mux)
 	mux.HandleFunc("GET /api/config", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"public_url": strings.TrimRight(s.PublicURL, "/")})
 	})
@@ -99,12 +108,16 @@ func (s *Server) Handler() http.Handler {
 
 type pluginView struct {
 	*plugin.Manifest
-	UIURL  string `json:"ui_url,omitempty"`
-	RunURL string `json:"run_url,omitempty"`
+	UIURL      string `json:"ui_url,omitempty"`
+	RunURL     string `json:"run_url,omitempty"`
+	ServiceURL string `json:"service_url,omitempty"`
 }
 
 func newPluginView(m *plugin.Manifest) pluginView {
 	v := pluginView{Manifest: m}
+	if m.Service != nil {
+		v.ServiceURL = "/s/" + m.ID + "/"
+	}
 	if m.UI != "" {
 		v.UIURL = "/p/" + m.ID + "/" + m.UI
 	}
@@ -117,7 +130,11 @@ func newPluginView(m *plugin.Manifest) pluginView {
 func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
 	list, errs := s.Registry.List()
 	out := make([]pluginView, 0, len(list))
+	want := r.URL.Query().Get("provides")
 	for _, m := range list {
+		if want != "" && !m.HasCapability(want) {
+			continue
+		}
 		out = append(out, newPluginView(m))
 	}
 	writeJSON(w, 200, map[string]any{"plugins": out, "errors": errs})
@@ -144,6 +161,15 @@ func (s *Server) runPlugin(w http.ResponseWriter, r *http.Request) {
 	if len(p.Run) == 0 {
 		httpError(w, 400, "this plugin has no run command (UI-only)")
 		return
+	}
+	// A job calling another plugin sends its token: the child job skips the
+	// queue (its parent holds a slot) and is canceled with the parent.
+	var parent *jobs.Job
+	if tok := r.Header.Get(jobTokenHeader); tok != "" {
+		if parent = s.Jobs.ByToken(tok); parent == nil {
+			httpError(w, 400, "unknown or finished job token")
+			return
+		}
 	}
 	j, err := s.Jobs.Create(p)
 	if err != nil {
@@ -236,8 +262,12 @@ func (s *Server) runPlugin(w http.ResponseWriter, r *http.Request) {
 	if len(title) > 120 {
 		title = title[:120] + "…"
 	}
-	if err := s.Jobs.Start(j, p, params, title); err != nil {
-		httpError(w, 500, err.Error())
+	if err := s.Jobs.StartWith(j, p, params, jobs.StartOptions{Title: title, Parent: parent}); err != nil {
+		code := 500
+		if parent != nil {
+			code = 400
+		}
+		httpError(w, code, err.Error())
 		return
 	}
 	started = true
@@ -510,13 +540,7 @@ func newJobView(s jobs.Snapshot) jobView {
 	return v
 }
 
-func jobFileURL(id, name string) string {
-	parts := strings.Split(name, "/")
-	for i, p := range parts {
-		parts[i] = url.PathEscape(p)
-	}
-	return "/api/jobs/" + id + "/files/" + strings.Join(parts, "/")
-}
+func jobFileURL(id, name string) string { return jobs.FileURL(id, name) }
 
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request, j *jobs.Job) {
 	if wait, ok := waitParam(r, 24*time.Hour); ok {
@@ -746,6 +770,7 @@ func (s *Server) createShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("share %s created (%d files, %s)", sh.ID, len(sh.Files), humanSize(sh.TotalSize()))
+	s.Events.Publish(events.Event{Topic: "share.created", Data: map[string]any{"share": sh.ID, "files": len(sh.Files), "size": sh.TotalSize()}})
 	writeJSON(w, 201, sh.View())
 }
 
@@ -763,6 +788,7 @@ func (s *Server) deleteShare(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 404, "share not found")
 		return
 	}
+	s.Events.Publish(events.Event{Topic: "share.deleted", Data: map[string]any{"share": r.PathValue("id")}})
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

@@ -70,6 +70,43 @@ var validTypes = map[string]bool{
 	"json": true, // any JSON value; not rendered by the generic form
 }
 
+// APIVersion is the plugin API this build implements. A manifest declaring
+// a higher aio_api is rejected so old hosts don't run plugins they can't serve.
+const APIVersion = 1
+
+// Requirement names another plugin this one needs: either an id that must
+// already exist (e.g. a built-in) or a community source to install.
+type Requirement struct {
+	ID     string `yaml:"id" json:"id,omitempty"`
+	Source string `yaml:"source" json:"source,omitempty"`
+}
+
+// Service is a long-running process supervised by the server and reachable
+// through the reverse proxy at /s/<id>/.
+type Service struct {
+	Run     []string `yaml:"run" json:"run"`
+	Health  string   `yaml:"health" json:"health,omitempty"`   // HTTP path polled to tell it is up
+	Restart string   `yaml:"restart" json:"restart,omitempty"` // always (default) | on-failure | never
+}
+
+// Schedule starts a job periodically: either every <duration> or on a
+// five-field cron expression (minute hour day-of-month month day-of-week).
+type Schedule struct {
+	Every  string         `yaml:"every" json:"every,omitempty"`
+	Cron   string         `yaml:"cron" json:"cron,omitempty"`
+	Params map[string]any `yaml:"params" json:"params,omitempty"`
+
+	Interval time.Duration `yaml:"-" json:"-"`
+	Spec     *CronSpec     `yaml:"-" json:"-"`
+}
+
+// EventHook starts a job when a matching event is published.
+type EventHook struct {
+	On     string         `yaml:"on" json:"on"`                   // topic, "job.done" or a prefix pattern "job.*"
+	Filter map[string]any `yaml:"filter" json:"filter,omitempty"` // event data fields that must match
+	Params map[string]any `yaml:"params" json:"params,omitempty"`
+}
+
 // Manifest is the parsed plugin.yaml.
 type Manifest struct {
 	ID          string   `yaml:"id" json:"id"`
@@ -84,8 +121,22 @@ type Manifest struct {
 	SubmitLabel string   `yaml:"submit_label" json:"submit_label,omitempty"`
 	TimeoutStr  string   `yaml:"timeout" json:"-"`
 
+	// Community / extension fields (all optional).
+	AIOAPI   int           `yaml:"aio_api" json:"aio_api,omitempty"`
+	Author   string        `yaml:"author" json:"author,omitempty"`
+	Homepage string        `yaml:"homepage" json:"homepage,omitempty"`
+	License  string        `yaml:"license" json:"license,omitempty"`
+	Provides []string      `yaml:"provides" json:"provides,omitempty"`
+	Requires []Requirement `yaml:"requires" json:"requires,omitempty"`
+	Setup    []string      `yaml:"setup" json:"setup,omitempty"`
+	Service  *Service      `yaml:"service" json:"service,omitempty"`
+	Schedule []Schedule    `yaml:"schedule" json:"schedule,omitempty"`
+	Events   []EventHook   `yaml:"events" json:"events,omitempty"`
+
 	Dir     string        `yaml:"-" json:"-"`
 	Timeout time.Duration `yaml:"-" json:"-"`
+	// Community is set by the registry for plugins installed from a source.
+	Community bool `yaml:"-" json:"community,omitempty"`
 }
 
 // Load parses and validates dir/plugin.yaml.
@@ -111,8 +162,60 @@ func Load(dir string) (*Manifest, error) {
 	if m.Category == "" {
 		m.Category = "Other"
 	}
-	if len(m.Run) == 0 && m.UI == "" {
-		return nil, fmt.Errorf("%s: 'run' is required (or set 'ui' for a UI-only plugin)", m.ID)
+	if len(m.Run) == 0 && m.UI == "" && m.Service == nil {
+		return nil, fmt.Errorf("%s: 'run' is required (or set 'ui' or 'service')", m.ID)
+	}
+	if m.AIOAPI > APIVersion {
+		return nil, fmt.Errorf("%s: needs plugin API %d, this AIO Toolkit supports %d (update the toolkit)", m.ID, m.AIOAPI, APIVersion)
+	}
+	for i, r := range m.Requires {
+		if (r.ID == "") == (r.Source == "") {
+			return nil, fmt.Errorf("%s: requires #%d needs exactly one of id or source", m.ID, i+1)
+		}
+	}
+	if m.Service != nil {
+		if len(m.Service.Run) == 0 {
+			return nil, fmt.Errorf("%s: service.run is required", m.ID)
+		}
+		switch m.Service.Restart {
+		case "":
+			m.Service.Restart = "always"
+		case "always", "on-failure", "never":
+		default:
+			return nil, fmt.Errorf("%s: service.restart must be always, on-failure or never", m.ID)
+		}
+		if m.Service.Health != "" && !strings.HasPrefix(m.Service.Health, "/") {
+			m.Service.Health = "/" + m.Service.Health
+		}
+	}
+	if (len(m.Schedule) > 0 || len(m.Events) > 0) && len(m.Run) == 0 {
+		return nil, fmt.Errorf("%s: schedule and events start jobs, so 'run' is required", m.ID)
+	}
+	for i := range m.Schedule {
+		sc := &m.Schedule[i]
+		switch {
+		case sc.Every != "" && sc.Cron != "":
+			return nil, fmt.Errorf("%s: schedule #%d: set every or cron, not both", m.ID, i+1)
+		case sc.Every != "":
+			d, err := time.ParseDuration(sc.Every)
+			if err != nil || d < time.Minute {
+				return nil, fmt.Errorf("%s: schedule #%d: every must be a duration of at least 1m", m.ID, i+1)
+			}
+			sc.Interval = d
+		case sc.Cron != "":
+			spec, err := ParseCron(sc.Cron)
+			if err != nil {
+				return nil, fmt.Errorf("%s: schedule #%d: %w", m.ID, i+1, err)
+			}
+			sc.Spec = spec
+		default:
+			return nil, fmt.Errorf("%s: schedule #%d needs every or cron", m.ID, i+1)
+		}
+	}
+	for i, e := range m.Events {
+		if e.On == "" {
+			return nil, fmt.Errorf("%s: events #%d needs 'on'", m.ID, i+1)
+		}
 	}
 	m.Timeout = 2 * time.Hour
 	if m.TimeoutStr != "" {
@@ -150,6 +253,43 @@ func Load(dir string) (*Manifest, error) {
 		}
 	}
 	return &m, nil
+}
+
+// Defaults returns params built from each input's default, with overrides
+// applied on top. Used for jobs not started from a form (schedules, events).
+func (m *Manifest) Defaults(overrides map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, in := range m.Inputs {
+		switch in.Type {
+		case "file":
+			out[in.Name] = []string{}
+		case "checkbox":
+			b, _ := in.Default.(bool)
+			out[in.Name] = b
+		case "number", "json":
+			out[in.Name] = in.Default
+		default:
+			if in.Default != nil {
+				out[in.Name] = fmt.Sprint(in.Default)
+			} else {
+				out[in.Name] = ""
+			}
+		}
+	}
+	for k, v := range overrides {
+		out[k] = v
+	}
+	return out
+}
+
+// HasCapability reports whether the plugin lists cap in provides.
+func (m *Manifest) HasCapability(cap string) bool {
+	for _, p := range m.Provides {
+		if p == cap {
+			return true
+		}
+	}
+	return false
 }
 
 // Input returns the input definition with the given name.

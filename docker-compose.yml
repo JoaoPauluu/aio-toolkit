@@ -13,7 +13,7 @@ services:
       AIO_JOB_TTL: 24h             # finished jobs (and their files) are deleted after this
       AIO_MAX_UPLOAD_MB: 4096
     volumes:
-      - ./plugins:/plugins         # your plugins; same id as a built-in overrides it. Edits are picked up live.
+      - ./plugins:/plugins         # your plugins (same id as a built-in overrides it) + community plugins in ./plugins/community
       - ./data:/data               # job files, history, updated yt-dlp
       - ./downloads:/downloads     # yt-dlp "library" downloads
     mem_limit: 768m                # guard rail for heavy ffmpeg/ghostscript jobs; idle use is ~10-20 MB

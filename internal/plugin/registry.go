@@ -27,6 +27,11 @@ type Registry struct {
 	plugins map[string]*Manifest
 	errors  []LoadError
 	print   uint64
+
+	hookMu    sync.Mutex
+	community string                // root whose plugins are marked Community
+	filter    func(*Manifest) bool  // false = skip (disabled community plugins)
+	listeners []func(map[string]*Manifest)
 }
 
 func NewRegistry(roots []string) *Registry {
@@ -35,8 +40,49 @@ func NewRegistry(roots []string) *Registry {
 	return r
 }
 
+// SetCommunityRoot marks plugins loaded from dir as community plugins.
+func (r *Registry) SetCommunityRoot(dir string) {
+	r.hookMu.Lock()
+	r.community = dir
+	r.hookMu.Unlock()
+}
+
+// SetFilter installs a predicate deciding which loaded plugins are active.
+// Call Reload afterwards for it to take effect.
+func (r *Registry) SetFilter(f func(*Manifest) bool) {
+	r.hookMu.Lock()
+	r.filter = f
+	r.hookMu.Unlock()
+}
+
+// OnReload registers f to be called (synchronously, in order) after every
+// reload with the active plugins. It is also called once immediately.
+func (r *Registry) OnReload(f func(map[string]*Manifest)) {
+	r.hookMu.Lock()
+	r.listeners = append(r.listeners, f)
+	r.hookMu.Unlock()
+	f(r.snapshot())
+}
+
+func (r *Registry) snapshot() map[string]*Manifest {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]*Manifest, len(r.plugins))
+	for k, v := range r.plugins {
+		out[k] = v
+	}
+	return out
+}
+
+// Roots returns the scanned roots in override order.
+func (r *Registry) Roots() []string { return append([]string{}, r.roots...) }
+
 // Reload rescans all roots.
 func (r *Registry) Reload() {
+	r.hookMu.Lock()
+	community, filter := r.community, r.filter
+	listeners := append([]func(map[string]*Manifest){}, r.listeners...)
+	r.hookMu.Unlock()
 	plugins := map[string]*Manifest{}
 	var errs []LoadError
 	for _, root := range r.roots {
@@ -60,6 +106,10 @@ func (r *Registry) Reload() {
 				errs = append(errs, LoadError{Dir: dir, Error: err.Error()})
 				continue
 			}
+			m.Community = community != "" && root == community
+			if filter != nil && !filter(m) {
+				continue
+			}
 			plugins[m.ID] = m
 		}
 	}
@@ -71,6 +121,18 @@ func (r *Registry) Reload() {
 	for _, e := range errs {
 		log.Printf("plugins: %s: %s", e.Dir, e.Error)
 	}
+	if len(listeners) > 0 {
+		snap := r.snapshot()
+		for _, f := range listeners {
+			f(snap)
+		}
+	}
+}
+
+// LoadedFrom returns the plugin with the given id as found in root, ignoring
+// overrides and the filter (used to inspect installed community plugins).
+func LoadedFrom(root, id string) (*Manifest, error) {
+	return Load(filepath.Join(root, id))
 }
 
 // fingerprint hashes names, sizes and mtimes of every manifest so changes
@@ -106,6 +168,18 @@ func (r *Registry) Watch(interval time.Duration) {
 			r.Reload()
 		}
 	}
+}
+
+// Find returns active plugins that list cap in provides.
+func (r *Registry) Find(cap string) []*Manifest {
+	list, _ := r.List()
+	out := []*Manifest{}
+	for _, m := range list {
+		if m.HasCapability(cap) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func (r *Registry) Get(id string) *Manifest {

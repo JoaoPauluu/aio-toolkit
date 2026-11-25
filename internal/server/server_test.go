@@ -205,7 +205,8 @@ func TestPluginSchema(t *testing.T) {
 // callable with just its defaults plus required inputs.
 func TestBuiltinPluginsAPIParity(t *testing.T) {
 	root, _ := filepath.Abs("../../plugins")
-	reg := plugin.NewRegistry([]string{root})
+	examples, _ := filepath.Abs("../../examples")
+	reg := plugin.NewRegistry([]string{root, examples})
 	list, errs := reg.List()
 	if len(errs) > 0 {
 		t.Fatalf("plugin load errors: %v", errs)

@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Community plugins</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    body { background: transparent; padding: 2px; }
+    .panel { padding: 16px; display: grid; gap: 12px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .row input[type=text] { flex: 1; min-width: 220px; font-family: var(--mono); font-size: 13px; }
+    .hint { font-size: 12px; color: var(--muted); }
+    .err { color: var(--err); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .warn { color: var(--warn); font-size: 13px; overflow-wrap: anywhere; }
+    h2.sec { margin: 22px 0 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .list { display: grid; gap: 10px; }
+    .src { padding: 14px; display: grid; gap: 8px; }
+    .src .top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .src .nm { flex: 1; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+    .src .meta { font-size: 12px; color: var(--muted); display: flex; gap: 6px 14px; flex-wrap: wrap; }
+    .src .meta code, .review code { font-family: var(--mono); font-size: 12px; }
+    .src.disabled { opacity: .65; }
+    .plugins { display: grid; gap: 6px; }
+    .pl { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; background: var(--panel-2); border-radius: 8px; }
+    .pl .ic { width: 22px; text-align: center; font-size: 18px; }
+    .pl .bd { flex: 1; min-width: 0; display: grid; gap: 2px; }
+    .pl .bd b { overflow-wrap: anywhere; }
+    .tags { display: flex; gap: 4px; flex-wrap: wrap; }
+    .tag { font-size: 11px; padding: 1px 7px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+    .tag.hot { color: var(--accent); border-color: var(--accent); }
+    .tag.bad { color: var(--warn); border-color: var(--warn); }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .toggle { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
+    .toggle input { width: 16px; height: 16px; }
+    .review { padding: 16px; display: grid; gap: 10px; border: 2px solid var(--warn); }
+    .review dl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; margin: 0; font-size: 13px; }
+    .review dt { color: var(--muted); }
+    .review dd { margin: 0; overflow-wrap: anywhere; }
+    .notice { font-size: 13px; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); }
+    pre.logs { max-height: 260px; overflow: auto; font-size: 12px; background: var(--panel-2); padding: 8px; border-radius: 8px; margin: 0; white-space: pre-wrap; }
+    .spin { display: inline-block; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="card panel">
+    <div class="row">
+      <input type="text" id="url" placeholder="https://github.com/owner/repo  ·  owner/repo@v1.0  ·  …/tree/main/folder  ·  https://…/plugin.zip" autocomplete="off" spellcheck="false">
+      <button class="btn primary" id="add">Add plugin</button>
+    </div>
+    <div class="hint">GitHub, GitLab, Codeberg / Gitea / Forgejo repositories, or a direct <code>.zip</code> / <code>.tar.gz</code> link.
+      Without <code>@ref</code> the latest release is installed (or the default branch if there are no releases).</div>
+    <div class="err" id="err"></div>
+    <div id="review"></div>
+  </div>
+
+  <h2 class="sec"><span>Installed</span>
+    <span class="actions">
+      <span class="hint" id="interval"></span>
+      <button class="btn ghost small" id="check-all">↻ Check all for updates</button>
+    </span>
+  </h2>
+  <div class="list" id="list"></div>
+  <p class="hint" id="empty" hidden>No community plugins yet. Paste a link above to add one.</p>
+  <p class="err" id="disabled" hidden>Community plugins are disabled on this server (<code>AIO_COMMUNITY=off</code>).</p>
+
+  <script src="/aio-sdk.js"></script>
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const el = (tag, attrs = {}, ...kids) => {
+      const e = document.createElement(tag);
+      for (const [k, v] of Object.entries(attrs)) {
+        if (v == null || v === false) continue;
+        if (k === "class") e.className = v;
+        else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+        else e[k] = v;
+      }
+      e.append(...kids.flat().filter((k) => k != null && k !== false));
+      return e;
+    };
+    const err = (m) => ($("#err").textContent = m || "");
+    const short = (c) => (c || "").replace(/^sha256:/, "").slice(0, 10);
+    const ago = (iso) => {
+      if (!iso || iso.startsWith("0001")) return "never";
+      const s = (Date.now() - new Date(iso)) / 1000;
+      if (s < 60) return "just now";
+      if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+      if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+      return `${Math.floor(s / 86400)} days ago`;
+    };
+    async function api(path, opts = {}) {
+      const r = await fetch(path, { ...opts, headers: opts.body ? { "Content-Type": "application/json" } : {} });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw Object.assign(new Error(body.error || r.statusText), { body });
+      return body;
+    }
+    const pluginsChanged = () => window.parent !== window && window.parent.postMessage({ type: "aio:plugins-changed" }, location.origin);
+
+    // ---------- review dialog
+    function pluginRows(list) {
+      return el("div", { class: "plugins" }, list.map((p) => el("div", { class: "pl" },
+        el("div", { class: "ic" }, p.icon || "🔧"),
+        el("div", { class: "bd" },
+          el("b", {}, p.name, p.version ? el("span", { class: "hint" }, `  v${p.version}`) : null),
+          p.description ? el("span", { class: "hint" }, p.description) : null,
+          el("div", { class: "tags" },
+            el("span", { class: "tag" }, p.id),
+            p.author ? el("span", { class: "tag" }, "by " + p.author) : null,
+            p.ui ? el("span", { class: "tag" }, "custom UI") : null,
+            p.service ? el("span", { class: "tag hot" }, "background service") : null,
+            (p.schedules || []).length ? el("span", { class: "tag hot" }, "⏰ " + p.schedules.join(", ")) : null,
+            (p.events || []).length ? el("span", { class: "tag hot" }, "⚡ " + p.events.join(", ")) : null,
+            (p.provides || []).map((c) => el("span", { class: "tag" }, "provides " + c)),
+            p.overrides_builtin ? el("span", { class: "tag bad" }, "replaces built-in") : null,
+            p.shadowed_by_local ? el("span", { class: "tag bad" }, "hidden by a local plugin with the same id") : null),
+          p.conflict ? el("span", { class: "err" }, p.conflict) : null))));
+    }
+
+    function showReview(pv) {
+      const box = $("#review");
+      const cmds = el("dl", {});
+      for (const p of pv.plugins) {
+        const add = (k, v) => v && v.length && cmds.append(el("dt", {}, k), el("dd", {}, el("code", {}, Array.isArray(v) ? v.join(" ") : v)));
+        if (pv.plugins.length > 1) cmds.append(el("dt", {}, el("b", {}, p.id)), el("dd", {}, ""));
+        add("runs", p.run); add("setup", p.setup); add("service", p.service); add("requires", (p.requires || []).join(", "));
+      }
+      const conflict = pv.plugins.some((p) => p.conflict);
+      const auto = el("input", { type: "checkbox", checked: true });
+      const install = el("button", { class: "btn primary", disabled: conflict }, pv.existing ? "Update to this version" : `Install ${pv.plugins.length > 1 ? pv.plugins.length + " plugins" : ""}`);
+      const cancel = el("button", { class: "btn" }, "Cancel");
+      cancel.onclick = () => { api(`/api/community/preview/${pv.token}`, { method: "DELETE" }).catch(() => {}); box.replaceChildren(); };
+      install.onclick = async () => {
+        install.disabled = true; cancel.disabled = true; err();
+        try {
+          await api("/api/community/install", { method: "POST", body: JSON.stringify({ token: pv.token, auto_update: auto.checked }) });
+          box.replaceChildren(); $("#url").value = "";
+          load();
+        } catch (e) { err(e.message); install.disabled = false; cancel.disabled = false; }
+      };
+      box.replaceChildren(el("div", { class: "card review" },
+        el("div", { class: "top" }, el("b", {}, "Review before installing"), " ",
+          el("a", { href: pv.web_url, target: "_blank", rel: "noopener" }, pv.spec.kind === "archive" ? pv.web_url : pv.spec.repo + (pv.spec.subdir ? "/" + pv.spec.subdir : ""))),
+        el("div", { class: "hint" }, pv.spec.kind === "archive" ? `archive ${short(pv.version.commit)}` : `${pv.version.ref} · commit ${short(pv.version.commit)}`),
+        pluginRows(pv.plugins),
+        cmds.childElementCount ? cmds : null,
+        el("div", { class: "notice" }, "⚠ Community plugins run their own code inside this container, with access to its data folders and the toolkit's API. Only install plugins from people you trust, and check the repository first."),
+        el("div", { class: "actions" },
+          el("label", { class: "toggle" }, auto, "Update automatically"),
+          el("span", { style: "flex:1" }), cancel, install)));
+    }
+
+    $("#add").onclick = async () => {
+      const url = $("#url").value.trim();
+      if (!url) return err("Paste a repository or archive link first.");
+      err(); $("#review").replaceChildren();
+      const btn = $("#add"); btn.disabled = true; btn.textContent = "Downloading…";
+      try { showReview(await api("/api/community/preview", { method: "POST", body: JSON.stringify({ url }) })); }
+      catch (e) { err(e.message); }
+      finally { btn.disabled = false; btn.textContent = "Add plugin"; }
+    };
+    $("#url").addEventListener("keydown", (e) => { if (e.key === "Enter") $("#add").click(); });
+
+    // ---------- installed list
+    let sources = [], services = [], openLogs = new Set(), lastKey = "";
+    async function load() {
+      try {
+        const data = await api("/api/community");
+        $("#disabled").hidden = data.enabled;
+        $("#check-all").hidden = !data.enabled || !data.sources.length;
+        $("#interval").textContent = data.enabled && data.check_interval && data.check_interval !== "0s" ? `checks every ${data.check_interval.replace(/0s$/, "").replace(/0m$/, "")}` : "";
+        const key = JSON.stringify(data.sources.map((s) => [s.id, s.commit, s.status]));
+        if (lastKey && key !== lastKey) pluginsChanged();
+        lastKey = key;
+        sources = data.sources;
+        services = (await api("/api/services")).services;
+      } catch (e) { err("Could not load: " + e.message); }
+      render();
+      clearTimeout(load.t);
+      load.t = setTimeout(load, sources.some((s) => s.status) ? 1500 : 15000);
+    }
+
+    async function act(fn) {
+      err();
+      try { await fn(); } catch (e) { err(e.message); }
+      load();
+    }
+
+    function render() {
+      $("#empty").hidden = sources.length > 0 || !$("#disabled").hidden;
+      $("#list").replaceChildren(...sources.map((s) => {
+        const busy = !!s.status;
+        const name = s.spec.kind === "archive" ? s.spec.url.split("/").pop() : s.spec.repo + (s.spec.subdir ? "/" + s.spec.subdir : "");
+        const enabled = el("input", { type: "checkbox", checked: s.enabled, disabled: busy,
+          onchange: () => act(() => api(`/api/community/${s.id}`, { method: "PATCH", body: JSON.stringify({ enabled: enabled.checked }) }).then(pluginsChanged)) });
+        const auto = el("input", { type: "checkbox", checked: s.auto_update, disabled: busy,
+          onchange: () => act(() => api(`/api/community/${s.id}`, { method: "PATCH", body: JSON.stringify({ auto_update: auto.checked }) })) });
+        const version = s.spec.kind === "archive" ? `archive ${short(s.commit)}` : `${s.ref || "?"} @ ${short(s.commit)}`;
+        const svc = services.filter((x) => s.plugins.some((p) => p.id === x.id));
+        const card = el("div", { class: "card src" + (s.enabled ? "" : " disabled") },
+          el("div", { class: "top" },
+            el("span", { class: "nm" }, el("a", { href: s.web_url, target: "_blank", rel: "noopener" }, name),
+              s.dependency ? el("span", { class: "tag", style: "margin-left:6px" }, "dependency") : null),
+            busy ? el("span", { class: "tag hot" }, el("span", { class: "spin" }, "⟳"), " " + s.status + "…") : null,
+            s.update_available && !busy ? el("span", { class: "tag hot" }, "update available") : null),
+          el("div", { class: "meta" },
+            el("span", {}, "version ", s.commit_url ? el("a", { href: s.commit_url, target: "_blank", rel: "noopener" }, el("code", {}, version)) : el("code", {}, version)),
+            s.update_available ? el("span", {}, "latest ", s.latest_url ? el("a", { href: s.latest_url, target: "_blank", rel: "noopener" }, el("code", {}, `${s.latest_ref} @ ${short(s.latest)}`)) : el("code", {}, short(s.latest))) : null,
+            el("span", {}, "updated " + ago(s.updated_at)),
+            el("span", {}, "checked " + ago(s.checked_at))),
+          pluginRows(s.plugins),
+          ...svc.map((x) => {
+            const logsOpen = openLogs.has(x.id);
+            const pre = logsOpen ? el("pre", { class: "logs" }, "loading…") : null;
+            if (pre) api(`/api/services/${x.id}/logs`).then((d) => { pre.textContent = d.logs.join("\n") || "(no output)"; pre.scrollTop = pre.scrollHeight; }).catch(() => {});
+            return el("div", { class: "pl" }, el("div", { class: "ic" }, "⚙"), el("div", { class: "bd" },
+              el("div", { class: "actions" },
+                el("span", {}, `Service ${x.id}: `, el("b", {}, x.state), x.restarts ? ` · ${x.restarts} restarts` : "", x.last_error ? ` · ${x.last_error}` : ""),
+                el("a", { class: "btn small", href: x.url, target: "_blank", rel: "noopener" }, "Open"),
+                el("button", { class: "btn small", onclick: () => act(() => api(`/api/services/${x.id}/restart`, { method: "POST" })) }, "Restart"),
+                el("button", { class: "btn small", onclick: () => { logsOpen ? openLogs.delete(x.id) : openLogs.add(x.id); render(); } }, logsOpen ? "Hide log" : "Log")),
+              pre));
+          }),
+          s.error ? el("div", { class: "err" }, s.error) : null,
+          s.warning ? el("div", { class: "warn" }, "⚠ " + s.warning) : null,
+          el("div", { class: "actions" },
+            el("label", { class: "toggle" }, enabled, "Enabled"),
+            el("label", { class: "toggle" }, auto, "Auto-update"),
+            el("span", { style: "flex:1" }),
+            el("button", { class: "btn small", disabled: busy, onclick: () => act(() => api(`/api/community/${s.id}/check`, { method: "POST" })) }, "Check now"),
+            s.update_available ? el("button", { class: "btn small primary", disabled: busy, onclick: () => act(() => api(`/api/community/${s.id}/update`, { method: "POST" })) }, "Update") : null,
+            s.prev ? el("button", { class: "btn small", disabled: busy, title: `Go back to ${s.prev.ref} @ ${short(s.prev.commit)} (turns auto-update off)`,
+              onclick: () => confirm(`Roll back to ${s.prev.ref} @ ${short(s.prev.commit)}? Auto-update will be turned off.`) && act(() => api(`/api/community/${s.id}/rollback`, { method: "POST" }).then(pluginsChanged)) }, "Roll back") : null,
+            el("button", { class: "btn small danger", disabled: busy,
+              onclick: () => confirm(`Remove ${name}? Its plugin folders are deleted; data it saved under /data/plugins is kept.`) && act(() => api(`/api/community/${s.id}`, { method: "DELETE" }).then(pluginsChanged)) }, "Remove")));
+        return card;
+      }));
+    }
+
+    $("#check-all").onclick = () => act(() => api("/api/community/check", { method: "POST" }).then(() => {
+      sources.forEach((s) => s.enabled && (s.status = "checking")); render();
+    }));
+    load();
+  </script>
+</body>
+</html>

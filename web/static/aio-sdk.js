@@ -10,6 +10,10 @@
 //     title: "my-job",
 //   });
 //   AIO.watch(job.id, (snapshot) => { ... });   // optional: the Jobs panel already tracks it
+//   const done = await AIO.call("other-plugin", { fields: {...} });   // run + wait
+//   AIO.on("job.done", (ev) => { ... });         // server events (SSE)
+//   await AIO.emit("my-plugin.saved", { n: 1 }); // publish a custom event
+//   fetch(AIO.serviceUrl() + "api/thing");       // this plugin's background service
 (() => {
   "use strict";
   const m = location.pathname.match(/^\/p\/([^/]+)\//);
@@ -57,6 +61,43 @@
     return () => es.close();
   }
 
+  // Run a plugin and resolve with the finished job (rejects if it fails).
+  //   const job = await AIO.call("pdf-merge", { files: { files: [a, b] } });
+  //   job.files[0].url
+  async function call(plugin, opts = {}) {
+    const job = await submit({ ...opts, plugin });
+    const done = await new Promise((resolve) => {
+      const stop = watch(job.id, (snap) => {
+        if (["done", "failed", "canceled"].includes(snap.state)) { stop(); resolve(snap); }
+      });
+    });
+    const full = await (await fetch(`/api/jobs/${done.id}`)).json();
+    if (full.state !== "done") throw Object.assign(new Error(full.error || full.state), { job: full });
+    return full;
+  }
+
+  // Plugins that declare `provides: [capability]`.
+  async function find(capability) {
+    const r = await fetch(`/api/plugins?provides=${encodeURIComponent(capability)}`);
+    return (await r.json()).plugins;
+  }
+
+  // Subscribe to server events ("job.done", "plugin.*", "my-plugin.thing", "*").
+  // Returns an unsubscribe function.
+  function on(topic, cb) {
+    const es = new EventSource(`/api/events?topic=${encodeURIComponent(topic)}`);
+    es.onmessage = (e) => { try { cb(JSON.parse(e.data)); } catch (err) { console.error(err); } };
+    return () => es.close();
+  }
+
+  async function emit(topic, data = {}) {
+    const r = await fetch("/api/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic, data }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+  }
+
+  // Base URL of a plugin's background service (default: this plugin's).
+  const serviceUrl = (id = pluginId) => `/s/${encodeURIComponent(id)}/`;
+
   const fileUrl = (job, name) => `/api/jobs/${job.id || job}/files/${name.split("/").map(encodeURIComponent).join("/")}`;
 
   // Keep the parent iframe sized to the content.
@@ -77,5 +118,5 @@
     } catch {}
   }
 
-  window.AIO = { pluginId, submit, watch, fileUrl };
+  window.AIO = { pluginId, submit, watch, fileUrl, call, find, on, emit, serviceUrl };
 })();
